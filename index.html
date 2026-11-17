@@ -124,12 +124,16 @@
     <div class="menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
       <h2 id="menu-title">栞</h2>
       <p class="count" id="count"></p>
-      <div class="row">
-        <span>書く時の鉛筆の音</span>
-        <div class="seg" role="group" aria-label="鉛筆の音">
-          <button type="button" data-sound="on">鳴らす</button>
-          <button type="button" data-sound="off">鳴らさない</button>
+      <div class="row col">
+        <div class="row-line">
+          <span>鉛筆の音</span>
+          <div class="seg" role="group" aria-label="鉛筆の音の大きさ">
+            <button type="button" data-level="off">なし</button>
+            <button type="button" data-level="low">小さく</button>
+            <button type="button" data-level="mid">ふつう</button>
+          </div>
         </div>
+        <p class="note">言葉を確定した時に、鉛筆の一筆が鳴ります。改行や消す時は鳴りません。</p>
       </div>
       <div class="row col">
         <span>控え（バックアップ）</span>

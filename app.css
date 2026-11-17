@@ -71,8 +71,9 @@ button:focus-visible, label:focus-within { outline: 1.5px solid var(--shu); outl
   overflow: hidden;
 }
 .screen { position: absolute; inset: 0; display: flex; flex-direction: column; }
-.screen.enter .page { animation: enter .38s var(--ease) both; }
-@keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* 画面の切り替えは、紙が静かに現れるだけ（位置は動かさない：キーボードの出入りと重ならないように） */
+.screen.enter .page { animation: enter .3s ease both; }
+@keyframes enter { from { opacity: 0; } to { opacity: 1; } }
 
 /* 動くのは中の紙だけ */
 .scroller {
@@ -193,10 +194,14 @@ button:focus-visible, label:focus-within { outline: 1.5px solid var(--shu); outl
 /* 書く：見えない入力欄の上に、手書きの写しを重ねる */
 .edit-sheet { cursor: text; padding-bottom: calc(var(--line) * 3); }
 .mirror { position: absolute; left: 4px; right: 4px; top: 6px; pointer-events: none; }
-.mirror .m { position: relative; top: var(--ty, 0); }
+.mirror .m { position: relative; top: var(--ty, 0); transition: color .32s ease; }
 .mirror .m.new { animation: ink .3s ease-out both; animation-delay: var(--dl, 0ms); }
 .mirror .m.quick { animation: ink .14s ease-out both; }
-.mirror .m.draft { text-decoration: underline dotted var(--ink-soft); text-decoration-thickness: 1px; text-underline-offset: 7px; }
+/* 変換前の字は淡い鉛筆の下書き。確定すると、すっと濃くなる（その瞬間に一筆の音） */
+.mirror .m.draft {
+  color: color-mix(in srgb, var(--pencil) 52%, transparent);
+  text-decoration: underline dotted var(--ink-soft); text-decoration-thickness: 1px; text-underline-offset: 7px;
+}
 @keyframes ink { from { opacity: 0; } to { opacity: 1; } }
 #ed {
   position: relative; display: block; width: 100%; min-height: calc(var(--line) * 6);
@@ -230,7 +235,8 @@ button:focus-visible, label:focus-within { outline: 1.5px solid var(--shu); outl
 .menu h2 { margin: 0; font-weight: 400; font-size: 20px; letter-spacing: .3em; }
 .count { margin: -10px 0 0; color: var(--ink-soft); font-size: 14px; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--rule); padding-top: 14px; }
-.row.col { flex-direction: column; align-items: stretch; }
+.row.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.row-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .seg { display: inline-flex; border: 1px solid var(--hair); border-radius: 999px; overflow: hidden; }
 .seg button { font-size: 14px; padding: 8px 14px; color: var(--ink-soft); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }

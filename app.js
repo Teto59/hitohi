@@ -98,20 +98,27 @@ const DB = (() => {
 const entries = new Map(); // date -> {date, text, created, updated}
 
 /* ───────────── 設定 ───────────── */
-const settings = { sound: true, lastExport: 0 };
-try { Object.assign(settings, JSON.parse(localStorage.getItem('hitohi-settings') || '{}')); } catch (e) {}
+const settings = { soundLevel: 'low', lastExport: 0 };
+try {
+  const saved = JSON.parse(localStorage.getItem('hitohi-settings') || '{}');
+  if (saved.sound === false && !saved.soundLevel) saved.soundLevel = 'off'; // 以前の「鳴らさない」を引き継ぐ
+  delete saved.sound;
+  Object.assign(settings, saved);
+} catch (e) {}
 const saveSettings = () => { try { localStorage.setItem('hitohi-settings', JSON.stringify(settings)); } catch (e) {} };
 
 /* ───────────── 鉛筆の音 ─────────────
- * 「指が動いている間、鉛筆が紙の上を走り続ける」。
- * 録音（サッ・サーッ・サッ の一続き、0.29秒）を切らずに丸ごと鳴らし、打ち続けている間は途切れなくつなぐ。
- * 指が止まったら、今書いている一画を最後まで書き終えて静かにやむ（途中で切らない）。
- * 高さと強さを一回ごとに少し変えて、同じ音の繰り返しに聞こえないようにする。 */
+ * 設計の芯：「音は、書いたことに対して一度だけ」。指の操作（打鍵）には反応しない。
+ *  - 一語一筆：変換して確定した言葉ひとつに、鉛筆の一筆。言葉の長さで筆の長さが変わる。
+ *  - 一度に鳴るのは一筆だけ（重ねない）。前の一筆が鳴っている間に来たものは鳴らさない。
+ *  - 改行・空白・句読点だけ・消す・変換候補の切り替え・貼り付け・取り消しでは鳴らさない（呼ぶ側で判断）。
+ *  - 音量は控えめが基本。高いシャリつきを削って、柔らかい音色にする。
+ * 録音は「サッ・サーッ・サッ」の一続き（0.29秒）。そこから筆の長さに合わせて区間を選ぶ。 */
 const Sound = (() => {
-  const BEGIN = [0.022, 0.022, 0.118]; // 書き出し位置（多くは頭から、時々二画目から）
-  const END = 0.285;
-  let ctx = null, master = null, buf = null, loading = null;
-  let until = 0, nextAt = 0, timer = null;
+  const LEVEL = { off: 0, low: 0.5, mid: 1.0 };
+  const SEG = { short: [0.022, 0.100], mid: [0.118, 0.282], full: [0.022, 0.285] };
+  let ctx = null, bus = null, buf = null, loading = null;
+  let busyUntil = 0, flowUntil = 0, timer = null;
 
   function init() {
     if (!ctx) {
@@ -119,7 +126,10 @@ const Sound = (() => {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
       ctx = new AC();
-      master = ctx.createGain(); master.gain.value = 2.0; master.connect(ctx.destination);
+      bus = ctx.createGain(); bus.gain.value = LEVEL[settings.soundLevel] ?? LEVEL.low;
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 160;           // こもった低音を除く
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4200; lp.Q.value = 0.5; // 耳に刺さる高音を丸める
+      bus.connect(hp); hp.connect(lp); lp.connect(ctx.destination);
       loading = fetch('sound/scribble.mp3').then(r => r.arrayBuffer())
         .then(b => new Promise((ok, ng) => ctx.decodeAudioData(b, ok, ng)))
         .then(b => (buf = b)).catch(() => null);
@@ -127,45 +137,55 @@ const Sound = (() => {
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
     return loading;
   }
+  function setLevel(level) { if (bus) bus.gain.setTargetAtTime(LEVEL[level] ?? 0, ctx.currentTime, 0.02); }
   function ready() {
-    if (!settings.sound || !ctx || !buf) return false;
+    if (settings.soundLevel === 'off' || !ctx || !buf) return false;
     if (ctx.state !== 'running') ctx.resume().catch(() => {}); // 音声入力の後などに止められていたら起こす
     return true;
   }
-  function stroke(t) {
-    const a = BEGIN[Math.floor(Math.random() * BEGIN.length)];
-    const rate = 0.93 + Math.random() * 0.14, len = (END - a) / rate;
+  // 一筆を t 秒に鳴らす。高さ・強さは毎回少し変える
+  function voice([a, b], t) {
+    const rate = 0.94 + Math.random() * 0.12, len = (b - a) / rate;
     const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
-    const g = ctx.createGain(), peak = 0.8 + Math.random() * 0.2;
+    const g = ctx.createGain(), peak = 0.75 + Math.random() * 0.25;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
-    g.gain.setValueAtTime(peak, t + len - 0.03);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.012);
+    g.gain.setValueAtTime(peak, Math.max(t + 0.014, t + len - 0.05));
     g.gain.exponentialRampToValueAtTime(0.0001, t + len);
-    src.connect(g); g.connect(master);
-    src.start(t, a, END - a);
-    return len;
+    src.connect(g); g.connect(bus);
+    src.start(t, a, b - a);
+    busyUntil = t + len;
+  }
+  // 一語一筆：n は確定した言葉の字数
+  function stroke(n) {
+    if (n <= 0 || !ready()) return;
+    const now = ctx.currentTime;
+    if (now < busyUntil - 0.04) return; // 前の一筆がまだ鳴っている
+    voice(n <= 2 ? SEG.short : n <= 5 ? SEG.mid : SEG.full, now + 0.01);
+  }
+  // 音声入力：字が現れている間だけ、一筆ずつ間を空けて書く
+  function flow(ms) {
+    if (!ready()) return;
+    flowUntil = Math.max(flowUntil, ctx.currentTime + ms / 1000);
+    if (!timer) { tick(); timer = setInterval(tick, 50); }
   }
   function tick() {
     const now = ctx.currentTime;
-    while (nextAt < until && nextAt < now + 0.15) {
-      const t = Math.max(nextAt, now + 0.005);
-      nextAt = t + stroke(t) * (0.9 + Math.random() * 0.14); // 少し重ねて、つなぎ目を感じさせない
+    if (now >= flowUntil) { clearInterval(timer); timer = null; return; }
+    if (busyUntil < now + 0.06) {
+      const t = Math.max(now + 0.01, busyUntil + 0.04 + Math.random() * 0.08);
+      if (t < flowUntil) voice(SEG.full, t);
     }
-    if (now > until && nextAt >= until) { clearInterval(timer); timer = null; }
   }
-  // ms ミリ秒先まで「書いている」状態にする
-  function write(ms) {
-    if (!ready()) return;
-    const now = ctx.currentTime;
-    until = Math.max(until, now + ms / 1000);
-    if (nextAt < now) nextAt = now; // 止まっていたら、すぐ書き始める
-    if (!timer) { tick(); timer = setInterval(tick, 40); }
-  }
-  function lift() { until = 0; } // 鉛筆を上げる（今の一画は最後まで）
-  return { init, write, lift };
+  function lift() { flowUntil = 0; } // 鉛筆を上げる（今の一筆は最後まで）
+  return { init, stroke, flow, lift, setLevel };
 })();
 // iOSは最初のタッチまで音を鳴らせないので、最初の操作で準備する
 ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, () => Sound.init(), { capture: true, passive: true }));
+
+// 「書いた」と数える字：改行・空白・句読点・括弧は数えない（それだけなら鉛筆は鳴らさない）
+const NO_INK = '、。，．・：；？！!?,.:;「」『』（）()【】〈〉《》〔〕…‥“”‘’"\'';
+const inkCount = arr => { let n = 0; for (const c of arr) if (!/\s/.test(c) && !NO_INK.includes(c)) n++; return n; };
 
 /* ───────────── 字が現れる速さ（音声入力でまとめて入った時） ───────────── */
 function schedule(n) {
@@ -381,46 +401,46 @@ const Editor = (() => {
     sync(Array.from(text));
   }
 
-  /* 指で打っている最中（変換前）：打った字はすぐ濃く書き、鉛筆を走らせる。
-   * 変換（字数が減る置き換え）や消す時は鉛筆を走らせない。 */
+  /* 指で打っている最中（変換前）：淡い鉛筆の下書きとして見せる。音は鳴らさない。 */
   function onComposing() {
     typedInComposition = true;
-    const now = Array.from(ed.value), { s, added, removed } = sync(now);
+    const now = Array.from(ed.value), { s, added } = sync(now);
     const [ds, de] = diff(stable, now);
     for (let i = ds; i < now.length - de; i++) nodes[i].classList.add('draft');
     for (let i = s; i < s + added; i++) nodes[i].classList.add('quick');
-    if (added > removed) Sound.write(220);       // 新しく一字打った
-    else if (added && added === removed && added <= 2) Sound.write(120); // 打ち替え（か→き、濁点など）
     queueSave(); // 変換前の字も控えておく（確定前にアプリを閉じても消えない）
     keepCaret();
   }
-  /* 入力が確定した（変換の確定・音声入力・貼り付け・英字など） */
+  /* 入力が確定した（変換の確定・音声入力・貼り付け・英字・改行など）
+   * 下書きが濃くなり、書いた言葉があればその瞬間に鉛筆の一筆が鳴る。 */
   function settle(inputType) {
     const now = Array.from(ed.value);
     sync(now);
     const [s, e] = diff(stable, now), insEnd = now.length - e, n = insEnd - s;
-    nodes.forEach(el => el.classList.remove('draft'));
-    // 打った時にもう書いている字は、確定でもう一度は書かない（iPhoneは確定の直後に知らせがもう一度来ることがある）
+    mirror.querySelectorAll('.m.draft').forEach(el => el.classList.remove('draft')); // 下書き → 清書（色がすっと濃くなる）
+    // 変換の確定（iPhoneは確定の直後に知らせがもう一度来ることがあるので、それも含める）
     const fromTyping = typedInComposition || inputType === 'insertFromComposition'
-      || inputType === 'deleteCompositionText' || performance.now() - lastCompEnd < 120;
+      || performance.now() - lastCompEnd < 120;
     typedInComposition = false;
-    if (n > 0 && !fromTyping) {
-      const paste = inputType === 'insertFromPaste' || inputType === 'insertFromDrop';
-      if (paste) {
-        for (let i = s; i < insEnd; i++) nodes[i].className = 'm quick';
-      } else if (n === 1) {
-        nodes[s].className = 'm quick';
-        Sound.write(220);
-      } else { // 音声入力のようにまとめて入った字：一文字ずつ現れ、その間鉛筆が走る
-        const ds = schedule(n);
-        let acc = 0;
-        for (let i = s; i < insEnd; i++) {
-          nodes[i].style.setProperty('--dl', acc.toFixed(0) + 'ms');
-          nodes[i].className = 'm new';
-          acc += ds[i - s];
-        }
-        Sound.write(acc + 80);
+    const words = n > 0 ? inkCount(now.slice(s, insEnd)) : 0; // 書いた字の数（改行・空白・句読点は数えない）
+    const quiet = /^(insertFromPaste|insertFromDrop|history|delete)/.test(inputType || '');
+    if (n > 0 && (quiet || words === 0)) {
+      for (let i = s; i < insEnd; i++) nodes[i].classList.add('quick'); // 貼り付け・改行など：音なし
+    } else if (words > 0 && fromTyping) {
+      Sound.stroke(words); // 一語一筆
+    } else if (words > 0 && n === 1) {
+      nodes[s].classList.add('quick');
+      Sound.stroke(1);
+    } else if (words > 0) {
+      // 音声入力のようにまとめて入った字：一文字ずつ現れ、その間だけ一筆ずつ書く
+      const ds = schedule(n);
+      let acc = 0;
+      for (let i = s; i < insEnd; i++) {
+        nodes[i].style.setProperty('--dl', acc.toFixed(0) + 'ms');
+        nodes[i].className = 'm new';
+        acc += ds[i - s];
       }
+      Sound.flow(acc + 60);
     }
     stable = now;
     queueSave();
@@ -540,7 +560,7 @@ const Editor = (() => {
 const Menu = (() => {
   const wrap = $('#menu'), msg = $('#io-msg');
   function sync() {
-    wrap.querySelectorAll('[data-sound]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.sound === 'on') === settings.sound)));
+    wrap.querySelectorAll('[data-level]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.level === settings.soundLevel)));
     $('#count').textContent = `これまでに綴った日　${entries.size}日`;
     $('#last-export').textContent = settings.lastExport
       ? `最後に控えを書き出した日　${dateLabelW(new Date(settings.lastExport))}`
@@ -559,8 +579,11 @@ const Menu = (() => {
   $('#menu-close').addEventListener('click', close);
   $('#menu-scrim').addEventListener('click', close);
   wrap.addEventListener('click', e => {
-    const s = e.target.closest('[data-sound]');
-    if (s) { settings.sound = s.dataset.sound === 'on'; saveSettings(); sync(); }
+    const b = e.target.closest('[data-level]');
+    if (!b) return;
+    settings.soundLevel = b.dataset.level; saveSettings(); sync();
+    Sound.init(); Sound.setLevel(settings.soundLevel);
+    setTimeout(() => Sound.stroke(4), 60); // 選んだ大きさで、試しに一筆
   });
   $('#export').addEventListener('click', async () => {
     const list = [...entries.values()].sort((a, b) => a.date.localeCompare(b.date));
