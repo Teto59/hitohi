@@ -108,12 +108,11 @@ try {
 const saveSettings = () => { try { localStorage.setItem('hitohi-settings', JSON.stringify(settings)); } catch (e) {} };
 
 /* ───────────── 鉛筆の音 ─────────────
- * 設計の芯：「音は、書いたことに対して一度だけ」。指の操作（打鍵）には反応しない。
- *  - 一語一筆：変換して確定した言葉ひとつに、鉛筆の一筆。言葉の長さで筆の長さが変わる。
- *  - 一度に鳴るのは一筆だけ（重ねない）。前の一筆が鳴っている間に来たものは鳴らさない。
+ * 設計の芯：「音は、書いたことに対して鳴らす」。指の操作（打鍵）には反応しない。
+ *  - 確定のたびに三画：変換して確定した言葉ひとつごとに、鉛筆で三画書く音（言葉の長さによらない）。
+ *  - 三画には入り・山・抜きの抑揚。書く順と間合いは毎回少しだけ変え、かすかに左から右へ動かす。
  *  - 改行・空白・句読点だけ・消す・変換候補の切り替え・貼り付け・取り消しでは鳴らさない（呼ぶ側で判断）。
- *  - 音量は控えめが基本。高いシャリつきを削って、柔らかい音色にする。
- * 録音は「サッ・サーッ・サッ」の一続き（0.29秒）。そこから筆の長さに合わせて区間を選ぶ。 */
+ *  - 音量は控えめが基本。音色は書き味（HB・2B・4B）で選べる。 */
 const Sound = (() => {
   /* 音の大きさ（一番最後に掛ける）。加工後の一筆の実効値（約 -24dBFS）を基準に、
    * 小さく＝約 -35dBFS、ふつう＝約 -29dBFS になるように測って決めた値 */
@@ -126,10 +125,15 @@ const Sound = (() => {
     '2B': { rate: 0.97, hp: 150, lp: 3800, body: 2.5, room: 0.09, gain: 1.00 },
     '4B': { rate: 0.88, hp: 100, lp: 2600, body: 4.0, room: 0.13, gain: 0.94 },
   };
-  // 録音（サッ・サーッ・サッ）の中で、鉛筆が紙を離れるところまで自然に書き終わる二つの区間。途中では切らない
-  const TAKES = [[0.022, 0.285], [0.118, 0.285]];
+  /* 録音は「サッ・サーッ・ッ」の三画でできている。画と画の間の静かな所（-50dB 前後）で区切って、一画ずつ使う。
+   * 区切りは静かな所なので、どの画も途中で切れた音にならない */
+  const STROKES = [[0.022, 0.108], [0.116, 0.214], [0.219, 0.285]];
+  // 三画は元の大きさがばらばら（実効値 -39／-29／-42dB）。どれも約 -32dB にそろえてから抑揚を付ける
+  const NORM = [2.3, 0.72, 3.3];
+  const ORDERS = [[0, 1, 2], [0, 1, 2], [0, 1, 2], [1, 0, 2], [0, 2, 1], [2, 1, 0]]; // 書く順（多くは録音どおりの自然な順）
+  const SHAPE = [0.86, 1.0, 0.7]; // 三画の強さ：入り・山・抜き
   let ctx = null, input, hp, body, lp, comp, makeup, out, room, buf = null, loading = null;
-  let lastStart = -1, lastTake = -1, busyUntil = 0, flowUntil = 0, timer = null;
+  let queued = [], ringUntil = 0, flowUntil = 0, timer = null;
   const lead = () => LEAD[settings.lead] || LEAD['2B'];
 
   // ごく短い部屋の響き（0.3秒）。机の上で書いている距離感を出す
@@ -186,31 +190,47 @@ const Sound = (() => {
     if (ctx.state !== 'running') ctx.resume().catch(() => {}); // 音声入力の後などに止められていたら起こす
     return true;
   }
-  // 一筆を t 秒に鳴らす。二つの区間を気まぐれに使い分け、高さ・強さはごくわずかに揺らす（同じ鉛筆のまま）
-  function voice(t) {
-    let k = Math.random() < 0.6 ? 0 : 1;
-    if (k === lastTake && Math.random() < 0.5) k = 1 - k;
-    lastTake = k;
-    const [a0, b] = TAKES[k], a = a0 + Math.random() * 0.006;
+  // 一画を t 秒に鳴らす。gain＝強さ、pan＝左右の位置。高さはごくわずかに揺らす（同じ鉛筆のまま）
+  function strokeAt(i, t, gain, pan) {
+    const [a, b] = STROKES[i];
+    gain *= NORM[i];
     const rate = lead().rate * (0.97 + Math.random() * 0.06), len = (b - a) / rate;
     const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
-    const g = ctx.createGain(), peak = 0.82 + Math.random() * 0.18;
+    const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
-    g.gain.setValueAtTime(peak, t + len - 0.04);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.004);
+    g.gain.setValueAtTime(gain, t + len - 0.014);
     g.gain.exponentialRampToValueAtTime(0.0001, t + len);
-    src.connect(g); g.connect(input);
+    src.connect(g);
+    if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = pan; g.connect(p); p.connect(input); }
+    else g.connect(input);
     src.start(t, a, b - a);
-    lastStart = t; busyUntil = t + len;
+    queued.push({ src, t, end: t + len });
+    return len;
   }
-  // 一語一筆：確定のたびに一回。あまりに速く続いた時（0.12秒以内）だけ省く。前の一筆の終わりには重ねてよい
-  function stroke() {
+  // 三画を t 秒から書く。入り・山・抜きの抑揚を付け、順番と間合いは毎回少しだけ変える
+  function phraseAt(t) {
+    const order = ORDERS[Math.floor(Math.random() * ORDERS.length)];
+    const pan0 = -0.14 + Math.random() * 0.04;
+    order.forEach((i, j) => {
+      const len = strokeAt(i, t, SHAPE[j] * (0.92 + Math.random() * 0.16), pan0 + j * 0.12);
+      ringUntil = t + len;
+      t += len + 0.045 + Math.random() * 0.05; // 画と画の間（手が次の画へ移る間）
+    });
+  }
+  // 確定のたびに三画（言葉の長さによらない）。
+  // 前の三画がまだ途中なら、鳴っている画は最後まで鳴らし、まだ鳴り始めていない画だけ取りやめて、続けて書く
+  function phrase() {
     if (!ready()) return;
     const now = ctx.currentTime;
-    if (now - lastStart < 0.12) return;
-    voice(now + 0.01);
+    queued = queued.filter(q => {
+      if (q.t > now + 0.004) { try { q.src.stop(); } catch (e) {} return false; }
+      return q.end > now;
+    });
+    const ringing = queued.length ? Math.max(...queued.map(q => q.end)) : 0;
+    phraseAt(Math.max(now + 0.01, ringing - 0.01));
   }
-  // 音声入力：字が現れている間だけ、一筆ずつ間を空けて書く
+  // 音声入力：字が現れている間だけ、三画ずつ、少し間を空けて書く
   function flow(ms) {
     if (!ready()) return;
     flowUntil = Math.max(flowUntil, ctx.currentTime + ms / 1000);
@@ -218,14 +238,15 @@ const Sound = (() => {
   }
   function tick() {
     const now = ctx.currentTime;
+    queued = queued.filter(q => q.end > now);
     if (now >= flowUntil) { clearInterval(timer); timer = null; return; }
-    if (busyUntil < now + 0.06) {
-      const t = Math.max(now + 0.01, busyUntil + 0.04 + Math.random() * 0.08);
-      if (t < flowUntil) voice(t);
+    if (ringUntil < now + 0.06) {
+      const t = Math.max(now + 0.01, ringUntil + 0.12 + Math.random() * 0.1);
+      if (t < flowUntil) phraseAt(t);
     }
   }
-  function lift() { flowUntil = 0; } // 鉛筆を上げる（今の一筆は最後まで）
-  return { init, stroke, flow, lift, apply, LEAD };
+  function lift() { flowUntil = 0; } // 鉛筆を上げる（今の一画は最後まで）
+  return { init, phrase, flow, lift, apply, LEAD };
 })();
 // iOSは最初のタッチまで音を鳴らせないので、最初の操作で準備する
 ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, () => Sound.init(), { capture: true, passive: true }));
@@ -474,10 +495,10 @@ const Editor = (() => {
     if (n > 0 && (quiet || words === 0)) {
       for (let i = s; i < insEnd; i++) nodes[i].classList.add('quick'); // 貼り付け・改行など：音なし
     } else if (words > 0 && fromTyping) {
-      Sound.stroke(words); // 一語一筆
+      Sound.phrase(); // 確定のたびに三画（言葉の長さによらない）
     } else if (words > 0 && n === 1) {
       nodes[s].classList.add('quick');
-      Sound.stroke(1);
+      Sound.phrase();
     } else if (words > 0) {
       // 音声入力のようにまとめて入った字：一文字ずつ現れ、その間だけ一筆ずつ書く
       const ds = schedule(n);
@@ -637,7 +658,7 @@ const Menu = (() => {
     if (ld) settings.lead = ld.dataset.lead;
     saveSettings(); sync();
     Sound.init(); Sound.apply();
-    setTimeout(() => Sound.stroke(), 80);
+    setTimeout(() => Sound.phrase(), 80);
   });
   $('#export').addEventListener('click', async () => {
     const list = [...entries.values()].sort((a, b) => a.date.localeCompare(b.date));
