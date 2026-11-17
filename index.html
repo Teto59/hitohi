@@ -33,94 +33,119 @@
   </filter>
 </svg>
 
-<main id="app">
+<!--
+  画面の作り：アプリの枠（#app）は動かない。動くのは各画面の中の紙（.scroller）だけ。
+  下の帯（.dock）は枠の一部なので、スクロールしても入力しても動かない。
+  キーボードが出た時だけ、枠の高さをキーボードの上までに縮める（app.js の fitViewport）。
+-->
+<div id="app">
 
   <!-- 暦 -->
   <section id="cal" class="screen" aria-label="暦">
-    <header class="cal-head">
-      <div class="wafu" id="wafu">霜月</div>
-      <div class="ym-row">
-        <button class="nav" id="prev" type="button" aria-label="前の月">‹</button>
-        <span class="ym" id="ym"></span>
-        <button class="nav" id="next" type="button" aria-label="次の月">›</button>
+    <div class="scroller" id="cal-scroll">
+      <div class="page">
+        <header class="cal-head">
+          <div class="wafu" id="wafu">霜月</div>
+          <div class="ym-row">
+            <button class="nav" id="prev" type="button" aria-label="前の月">‹</button>
+            <span class="ym" id="ym"></span>
+            <button class="nav" id="next" type="button" aria-label="次の月">›</button>
+          </div>
+          <div class="sekki" id="sekki"></div>
+        </header>
+        <div class="week" aria-hidden="true">
+          <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+        </div>
+        <div class="grid" id="grid" role="grid"></div>
       </div>
-      <div class="sekki" id="sekki"></div>
-    </header>
-    <div class="week" aria-hidden="true">
-      <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
     </div>
-    <div class="grid" id="grid" role="grid"></div>
-    <footer class="cal-foot">
-      <button class="ghost" id="menu-open" type="button">栞</button>
+    <footer class="dock dock-cal">
+      <button class="dock-btn" id="menu-open" type="button">栞</button>
       <button class="fude" id="write-today" type="button" aria-label="今日を書く">
         <svg viewBox="0 0 64 64" aria-hidden="true"><path class="enso" d="M32 6c14 0 26 11 26 26S46 58 32 58 6 46 6 32c0-9 5-17 12-21"/></svg>
         <span>書く</span>
       </button>
-      <button class="ghost" id="go-today" type="button">今日</button>
+      <button class="dock-btn" id="go-today" type="button">今日</button>
     </footer>
   </section>
 
-  <!-- 読み返す -->
-  <section id="read" class="screen paged" aria-label="読み返す" hidden>
-    <header class="bar">
-      <h1 class="date" id="read-date"></h1>
-    </header>
-    <article class="sheet">
-      <div class="hand" id="read-hand"></div>
-    </article>
+  <!-- 読む -->
+  <section id="read" class="screen" aria-label="読む" hidden>
+    <div class="scroller" id="read-scroll">
+      <div class="page">
+        <header class="page-head"><h1 class="date" id="read-date"></h1></header>
+        <article class="sheet"><div class="hand" id="read-hand"></div></article>
+      </div>
+    </div>
+    <nav class="dock" aria-label="読む画面の操作">
+      <button class="dock-btn back" id="read-back" type="button"><span class="chev" aria-hidden="true">‹</span>暦</button>
+      <span class="dock-c" id="read-count"></span>
+      <button class="pill" id="fix" type="button">なおす</button>
+    </nav>
   </section>
 
   <!-- 書く -->
-  <section id="edit" class="screen paged" aria-label="書く" hidden>
-    <header class="bar">
-      <h1 class="date" id="edit-date"></h1>
-    </header>
-    <div class="sheet edit-sheet">
-      <div class="mirror" id="mirror" aria-hidden="true"></div>
-      <textarea id="ed" rows="6" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="今日のこと"></textarea>
-      <p class="placeholder" id="ph">キーボードのマイクで話すか、<br>指で打って、今日のことを綴ってください。</p>
+  <section id="edit" class="screen" aria-label="書く" hidden>
+    <div class="scroller" id="edit-scroll">
+      <div class="page">
+        <header class="page-head"><h1 class="date" id="edit-date"></h1></header>
+        <div class="sheet edit-sheet" id="edit-sheet">
+          <div class="mirror" id="mirror" aria-hidden="true"></div>
+          <textarea id="ed" rows="6" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="今日のこと"></textarea>
+          <p class="placeholder" id="ph">キーボードのマイクで話すか、<br>指で打って、今日のことを綴ってください。</p>
+        </div>
+      </div>
     </div>
+    <nav class="dock" aria-label="書く画面の操作">
+      <button class="dock-btn back" id="edit-back" type="button"><span class="chev" aria-hidden="true">‹</span>暦</button>
+      <span class="dock-c" id="edit-count"></span>
+      <button class="pill primary" id="done" type="button">綴じる</button>
+    </nav>
   </section>
 
-</main>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-<!-- 下の操作帯：いつも親指の届く所（キーボードが出ている時は、そのすぐ上）に置く -->
-<nav class="dock" id="edit-dock" aria-label="書く画面の操作" hidden>
-  <button class="dock-l" id="edit-back" type="button">‹ 暦</button>
-  <span class="dock-c" id="edit-count" aria-live="off"></span>
-  <button class="dock-r done" id="done" type="button">綴じる</button>
-</nav>
-<nav class="dock" id="read-dock" aria-label="読む画面の操作" hidden>
-  <button class="dock-l" id="read-back" type="button">‹ 暦</button>
-  <span class="dock-c" id="read-count"></span>
-  <button class="dock-r done" id="fix" type="button">なおす</button>
-</nav>
-
-<!-- 栞（設定） -->
-<div class="sheet-wrap" id="menu" hidden>
-  <div class="scrim" id="menu-scrim"></div>
-  <div class="menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
-    <h2 id="menu-title">栞</h2>
-    <p class="count" id="count"></p>
-    <div class="row">
-      <span>書く時の鉛筆の音</span>
-      <div class="seg" role="group" aria-label="鉛筆の音">
-        <button type="button" data-sound="on">鳴らす</button>
-        <button type="button" data-sound="off">鳴らさない</button>
+  <!-- 全部消した頁を閉じる時の確認 -->
+  <div class="sheet-wrap" id="confirm" hidden>
+    <div class="scrim"></div>
+    <div class="menu" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+      <h2 id="confirm-title">白紙に戻しますか</h2>
+      <p class="note" id="confirm-text"></p>
+      <div class="btns end">
+        <button type="button" class="pill" id="confirm-clear">白紙にする</button>
+        <button type="button" class="pill primary" id="confirm-keep">書き戻す</button>
       </div>
     </div>
-    <div class="row col">
-      <span>控え（バックアップ）</span>
-      <p class="note">日記はこのiPhoneの中だけに保存されています。ときどき控えを書き出して、「ファイル」アプリのiCloud Driveなどに保存してください。</p>
-      <div class="btns">
-        <button type="button" class="ghost" id="export">控えを書き出す</button>
-        <label class="ghost file">控えから戻す<input type="file" id="import" accept="application/json,.json"></label>
-      </div>
-      <p class="note" id="io-msg" role="status"></p>
-    </div>
-    <p class="credit">書体　Klee One／Yuji Syuku（SIL Open Font License）<br>鉛筆の音　Pixabay</p>
-    <button type="button" class="close" id="menu-close">閉じる</button>
   </div>
+
+  <!-- 栞（設定） -->
+  <div class="sheet-wrap" id="menu" hidden>
+    <div class="scrim" id="menu-scrim"></div>
+    <div class="menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+      <h2 id="menu-title">栞</h2>
+      <p class="count" id="count"></p>
+      <div class="row">
+        <span>書く時の鉛筆の音</span>
+        <div class="seg" role="group" aria-label="鉛筆の音">
+          <button type="button" data-sound="on">鳴らす</button>
+          <button type="button" data-sound="off">鳴らさない</button>
+        </div>
+      </div>
+      <div class="row col">
+        <span>控え（バックアップ）</span>
+        <p class="note">日記はこのiPhoneの中だけに保存されています。月に一度ほど控えを書き出して、「ファイル」アプリのiCloud Driveなどに保存してください。</p>
+        <p class="note" id="last-export"></p>
+        <div class="btns">
+          <button type="button" class="pill" id="export">控えを書き出す</button>
+          <label class="pill file">控えから戻す<input type="file" id="import" accept="application/json,.json"></label>
+        </div>
+        <p class="note" id="io-msg" role="status"></p>
+      </div>
+      <p class="credit">書体　Klee One／Yuji Syuku（SIL Open Font License）<br>鉛筆の音　Pixabay</p>
+      <button type="button" class="close" id="menu-close">閉じる</button>
+    </div>
+  </div>
+
 </div>
 
 <script src="app.js" defer></script>
