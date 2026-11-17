@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ひとひ</title>
+<meta name="description" content="鉛筆で綴る、一日一頁の日記">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ひとひ">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f1ece1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d1c1a" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- 手書きの字（必要な文字の分だけ少しずつ読み込まれ、一度読んだら端末に保存される） -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Klee+One:wght@600&display=swap">
+<!-- 和風月名の筆文字（12か月分の文字だけ） -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&text=%E7%9D%A6%E6%9C%88%E5%A6%82%E5%BC%A5%E7%94%9F%E5%8D%AF%E7%9A%90%E6%B0%B4%E7%84%A1%E6%96%87%E8%91%89%E9%95%B7%E7%A5%9E%E9%9C%9C%E5%B8%AB%E8%B5%B0&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <!-- 鉛筆の質感：線の縁をわずかに荒らし、粒状のかすれを混ぜる -->
+  <filter id="graphite" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="7" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="1.6" xChannelSelector="R" yChannelSelector="G" result="d"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -1.6 1.55" result="grain"/>
+    <feComposite in="d" in2="grain" operator="in"/>
+  </filter>
+  <!-- 朱印のかすれ -->
+  <filter id="stamp" x="-10%" y="-10%" width="120%" height="120%">
+    <feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="2" seed="3" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.2 2.05" result="grain"/>
+    <feComposite in="SourceGraphic" in2="grain" operator="in"/>
+  </filter>
+</svg>
+
+<main id="app">
+
+  <!-- 暦 -->
+  <section id="cal" class="screen" aria-label="暦">
+    <header class="cal-head">
+      <div class="wafu" id="wafu">霜月</div>
+      <div class="ym-row">
+        <button class="nav" id="prev" type="button" aria-label="前の月">‹</button>
+        <span class="ym" id="ym"></span>
+        <button class="nav" id="next" type="button" aria-label="次の月">›</button>
+      </div>
+      <div class="sekki" id="sekki"></div>
+    </header>
+    <div class="week" aria-hidden="true">
+      <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+    </div>
+    <div class="grid" id="grid" role="grid"></div>
+    <footer class="cal-foot">
+      <button class="ghost" id="menu-open" type="button">栞</button>
+      <button class="fude" id="write-today" type="button" aria-label="今日を書く">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><path class="enso" d="M32 6c14 0 26 11 26 26S46 58 32 58 6 46 6 32c0-9 5-17 12-21"/></svg>
+        <span>書く</span>
+      </button>
+      <button class="ghost" id="go-today" type="button">今日</button>
+    </footer>
+  </section>
+
+  <!-- 読み返す -->
+  <section id="read" class="screen" aria-label="読み返す" hidden>
+    <header class="bar">
+      <button class="back" id="read-back" type="button">‹ 暦</button>
+      <h1 class="date" id="read-date"></h1>
+      <span class="bar-sp"></span>
+    </header>
+    <article class="sheet">
+      <div class="hand" id="read-hand"></div>
+    </article>
+    <footer class="read-foot">
+      <button class="ghost" id="replay" type="button">もう一度</button>
+      <button class="link" id="fix" type="button">なおす</button>
+    </footer>
+  </section>
+
+  <!-- 書く -->
+  <section id="edit" class="screen" aria-label="書く" hidden>
+    <header class="bar">
+      <button class="back" id="edit-back" type="button">‹ 暦</button>
+      <h1 class="date" id="edit-date"></h1>
+      <button class="done" id="done" type="button">綴じる</button>
+    </header>
+    <div class="sheet edit-sheet">
+      <div class="mirror" id="mirror" aria-hidden="true"></div>
+      <textarea id="ed" rows="6" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="今日のこと"></textarea>
+      <p class="placeholder" id="ph">キーボードのマイクを押して、<br>今日のことを話してください。</p>
+    </div>
+  </section>
+
+</main>
+
+<!-- 栞（設定） -->
+<div class="sheet-wrap" id="menu" hidden>
+  <div class="scrim" id="menu-scrim"></div>
+  <div class="menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+    <h2 id="menu-title">栞</h2>
+    <p class="count" id="count"></p>
+    <div class="row">
+      <span>鉛筆の音</span>
+      <div class="seg" role="group" aria-label="鉛筆の音">
+        <button type="button" data-sound="on">鳴らす</button>
+        <button type="button" data-sound="off">鳴らさない</button>
+      </div>
+    </div>
+    <div class="row">
+      <span>読み返す速さ</span>
+      <div class="seg" role="group" aria-label="読み返す速さ">
+        <button type="button" data-speed="s1">はやい</button>
+        <button type="button" data-speed="s2">もっと</button>
+        <button type="button" data-speed="s3">さらに</button>
+      </div>
+    </div>
+    <div class="row col">
+      <span>控え（バックアップ）</span>
+      <p class="note">日記はこのiPhoneの中だけに保存されています。ときどき控えを書き出して、「ファイル」アプリのiCloud Driveなどに保存してください。</p>
+      <div class="btns">
+        <button type="button" class="ghost" id="export">控えを書き出す</button>
+        <label class="ghost file">控えから戻す<input type="file" id="import" accept="application/json,.json"></label>
+      </div>
+      <p class="note" id="io-msg" role="status"></p>
+    </div>
+    <p class="credit">書体　Klee One／Yuji Syuku（SIL Open Font License）<br>鉛筆の音　Pixabay</p>
+    <button type="button" class="close" id="menu-close">閉じる</button>
+  </div>
+</div>
+
+<script src="app.js" defer></script>
+</body>
+</html>
