@@ -25,13 +25,6 @@
 <body>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
-  <!-- 鉛筆の質感：線の縁をわずかに荒らし、粒状のかすれを混ぜる -->
-  <filter id="graphite" x="-5%" y="-5%" width="110%" height="110%">
-    <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="7" result="n"/>
-    <feDisplacementMap in="SourceGraphic" in2="n" scale="1.6" xChannelSelector="R" yChannelSelector="G" result="d"/>
-    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -1.6 1.55" result="grain"/>
-    <feComposite in="d" in2="grain" operator="in"/>
-  </filter>
   <!-- 朱印のかすれ -->
   <filter id="stamp" x="-10%" y="-10%" width="120%" height="120%">
     <feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="2" seed="3" result="n"/>
@@ -78,7 +71,6 @@
       <div class="hand" id="read-hand"></div>
     </article>
     <footer class="read-foot">
-      <button class="ghost" id="replay" type="button">もう一度</button>
       <button class="link" id="fix" type="button">なおす</button>
     </footer>
   </section>
@@ -106,18 +98,10 @@
     <h2 id="menu-title">栞</h2>
     <p class="count" id="count"></p>
     <div class="row">
-      <span>鉛筆の音</span>
+      <span>書く時の鉛筆の音</span>
       <div class="seg" role="group" aria-label="鉛筆の音">
         <button type="button" data-sound="on">鳴らす</button>
         <button type="button" data-sound="off">鳴らさない</button>
-      </div>
-    </div>
-    <div class="row">
-      <span>読み返す速さ</span>
-      <div class="seg" role="group" aria-label="読み返す速さ">
-        <button type="button" data-speed="s1">はやい</button>
-        <button type="button" data-speed="s2">もっと</button>
-        <button type="button" data-speed="s3">さらに</button>
       </div>
     </div>
     <div class="row col">

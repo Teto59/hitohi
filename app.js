@@ -122,6 +122,8 @@ const Sound = (() => {
   // chars: 文字、ds: 各文字の間隔(ms)
   function play(chars, ds) {
     if (!settings.sound || !ctx || !buf) return null;
+    // 音声入力の後などは iPhone が音を止めた状態にするので、鳴らす前に起こす
+    if (ctx.state !== 'running') ctx.resume().catch(() => {});
     const bus = ctx.createGain(); bus.connect(master);
     const srcs = [], t0 = ctx.currentTime + 0.02;
     let t = 0, free = 0, last = -1;
@@ -192,28 +194,6 @@ function renderHand(el, text, seedKey) {
   }
   el.textContent = ''; el.appendChild(frag);
   return chars;
-}
-// 一文字ずつ書いていく。戻り値の skip() で最後まで飛ばす
-function writeOut(el, chars) {
-  const ds = schedule(chars.length);
-  el.classList.add('writing');
-  chars.forEach(c => c.classList.remove('on'));
-  const snd = Sound.play(chars.map(c => c.textContent), ds);
-  let i = 0, timer = null, done = false;
-  const finish = () => {
-    if (done) return; done = true; clearTimeout(timer); Sound.stop(snd);
-    chars.forEach(c => c.classList.add('on'));
-    el.classList.remove('writing');
-  };
-  const step = () => {
-    if (i >= chars.length) { done = true; setTimeout(() => el.classList.remove('writing'), 400); return; }
-    const c = chars[i], d = ds[i];
-    c.style.setProperty('--d', Math.max(50, d * 1.5) + 'ms');
-    c.classList.add('on');
-    i++; timer = setTimeout(step, d);
-  };
-  step();
-  return { skip: finish };
 }
 
 /* ───────────── 画面の切り替え ───────────── */
@@ -298,29 +278,16 @@ const Cal = (() => {
 })();
 
 /* ───────────── 読み返す ───────────── */
+// 開いたらすぐ全文を見せる（書き直しの演出はしない）
 const Reader = (() => {
   const hand = $('#read-hand');
-  let ctl = null;
-  let token = 0;
-  async function open(k, push = true) {
+  function open(k, push = true) {
     viewDate = k;
-    const my = ++token;
     $('#read-date').textContent = dateLabel(fromKey(k));
     show('read', push);
-    const chars = renderHand(hand, entries.get(k).text, k);
-    hand.classList.add('writing'); // 書き始めるまで紙は白いまま
-    // 音の準備がまだなら少しだけ待つ（最長0.8秒）
-    await Promise.race([Sound.init(), new Promise(r => setTimeout(r, 800))]);
-    if (my !== token || current !== 'read') return;
-    ctl = writeOut(hand, chars);
+    renderHand(hand, entries.get(k).text, k);
   }
-  function stop() { token++; if (ctl) ctl.skip(); ctl = null; hand.classList.remove('writing'); }
-  hand.addEventListener('click', () => { if (ctl) ctl.skip(); });
-  $('#replay').addEventListener('click', () => {
-    stop();
-    const chars = [...hand.querySelectorAll('.c')];
-    ctl = writeOut(hand, chars);
-  });
+  function stop() {}
   $('#fix').addEventListener('click', () => Editor.open(viewDate));
   $('#read-back').addEventListener('click', () => { Cal.set(fromKey(viewDate)); goCal(); });
   return { open, stop };
@@ -336,51 +303,74 @@ function goCal() {
  * 音声入力などで増えた文字だけ、鉛筆の音と一緒に一文字ずつ現れる。 */
 const Editor = (() => {
   const ed = $('#ed'), mirror = $('#mirror'), ph = $('#ph');
-  let key = null, existedBefore = false, stable = [], revealAt = [], composing = false, saveTimer = null, snd = null;
+  const tail = document.createTextNode('​'); // 最後の改行の後も高さを保つための印
+  let key = null, existedBefore = false, stable = [], shown = [], nodes = [], composing = false, saveTimer = null, snd = null;
 
-  function grow() { ed.style.height = 'auto'; ed.style.height = ed.scrollHeight + 'px'; }
-  function render(draftFrom = -1) {
-    const chars = Array.from(ed.value), now = performance.now(), r = seeded(hashStr(key || 'x'));
-    let html = '';
-    for (let i = 0; i < chars.length; i++) {
-      const ch = chars[i], j = jitter(r);
-      if (ch === '\n') { html += '\n'; continue; }
-      const wait = (revealAt[i] || 0) - now;
-      // 現れている途中の字は、負の遅延で途中から続ける（描き直してもちらつかない）
-      const cls = 'm' + (draftFrom >= 0 && i >= draftFrom ? ' draft' : wait > -320 ? ' new' : '');
-      const esc = ch === '<' ? '&lt;' : ch === '&' ? '&amp;' : ch === '>' ? '&gt;' : ch;
-      html += `<span class="${cls}" style="--ty:${j.ty}px;--a:${j.a};--dl:${wait.toFixed(0)}ms">${esc}</span>`;
-    }
-    mirror.innerHTML = html + '​';
-    ph.hidden = chars.length > 0;
-    grow();
+  // a と b の違う範囲を求める → [先頭の一致数, 末尾の一致数]
+  function diff(a, b) {
+    let s = 0; while (s < a.length && s < b.length && a[s] === b[s]) s++;
+    let e = 0; while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+    return [s, e];
   }
+  function span(ch) {
+    const el = document.createElement('span'), j = jitter(Math.random);
+    el.className = 'm'; el.textContent = ch;
+    el.style.cssText = `--ty:${j.ty}px`;
+    return el;
+  }
+  // 写しを、変わった文字の分だけ差し替える（全文を描き直さないので、長くなっても軽い）
+  function sync(now) {
+    const [s, e] = diff(shown, now);
+    const oldEnd = shown.length - e, newEnd = now.length - e;
+    for (let i = s; i < oldEnd; i++) nodes[i].remove();
+    const before = nodes[oldEnd] || tail, add = [];
+    for (let i = s; i < newEnd; i++) { const el = span(now[i]); mirror.insertBefore(el, before); add.push(el); }
+    nodes.splice(s, oldEnd - s, ...add);
+    const shrank = now.length < shown.length;
+    shown = now;
+    ph.hidden = now.length > 0;
+    // 入力欄の高さを中身に合わせる（縮む時だけ一度リセット）
+    if (shrank) ed.style.height = 'auto';
+    if (shrank || ed.scrollHeight > ed.clientHeight + 1) ed.style.height = ed.scrollHeight + 'px';
+  }
+  function rebuild(text) {
+    mirror.textContent = '';
+    shown = []; nodes = [];
+    mirror.appendChild(tail);
+    ed.style.height = 'auto';
+    sync(Array.from(text));
+  }
+  // 入力が確定した：前回確定した文字列と比べ、新しく入った字だけを鉛筆の音とともに書く
   function settle() {
-    // 前回確定した文字列と比べ、新しく入った範囲だけを「書く」
-    const now = Array.from(ed.value), a = stable;
-    let s = 0; while (s < a.length && s < now.length && a[s] === now[s]) s++;
-    let e = 0; while (e < a.length - s && e < now.length - s && a[a.length - 1 - e] === now[now.length - 1 - e]) e++;
-    const insEnd = now.length - e, n = insEnd - s;
-    revealAt.splice(s, a.length - e - s, ...new Array(Math.max(0, n)).fill(0));
-    revealAt.length = now.length;
+    const now = Array.from(ed.value);
+    sync(now);
+    const [s, e] = diff(stable, now), insEnd = now.length - e, n = insEnd - s;
     if (n > 0) {
-      const ds = schedule(n, 's1', 6), t = performance.now();
+      const ds = schedule(n, 's1', 6);
       let acc = 0;
-      for (let i = 0; i < n; i++) { revealAt[s + i] = t + acc; acc += ds[i]; }
+      for (let i = s; i < insEnd; i++) {
+        const el = nodes[i];
+        el.className = 'm';
+        el.style.setProperty('--dl', acc.toFixed(0) + 'ms');
+        void el.offsetWidth; // 動きを最初から
+        el.className = 'm new';
+        acc += ds[i - s];
+      }
       Sound.stop(snd);
       snd = Sound.play(now.slice(s, insEnd), ds);
     }
     stable = now;
-    render();
     queueSave();
   }
   ed.addEventListener('compositionstart', () => { composing = true; });
   ed.addEventListener('compositionend', () => { composing = false; settle(); });
   ed.addEventListener('input', e => {
     if (composing || e.isComposing) {
-      let s = 0; const now = Array.from(ed.value);
-      while (s < stable.length && s < now.length && stable[s] === now[s]) s++;
-      render(s);
+      // 変換中の字は薄く表示しておく
+      const now = Array.from(ed.value);
+      sync(now);
+      const [s, e2] = diff(stable, now);
+      for (let i = s; i < now.length - e2; i++) nodes[i].className = 'm draft';
     } else settle();
   });
   $('.edit-sheet').addEventListener('click', e => { if (e.target !== ed) ed.focus(); });
@@ -408,10 +398,9 @@ const Editor = (() => {
     const text = existedBefore ? entries.get(k).text : '';
     ed.value = text;
     stable = Array.from(text);
-    revealAt = new Array(stable.length).fill(0);
     $('#edit-date').textContent = dateLabel(fromKey(k));
     show('edit');
-    render();
+    rebuild(text);
     // 開いてすぐキーボードを出す（iPhoneはタップの処理の中で focus しないとキーボードが出ない）
     try { ed.focus({ preventScroll: true }); const L = ed.value.length; ed.setSelectionRange(L, L); } catch (e) {}
   }
@@ -442,7 +431,6 @@ const Menu = (() => {
   const wrap = $('#menu'), msg = $('#io-msg');
   function sync() {
     wrap.querySelectorAll('[data-sound]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.sound === 'on') === settings.sound)));
-    wrap.querySelectorAll('[data-speed]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.speed === settings.speed)));
     $('#count').textContent = `これまでに綴った日　${entries.size}日`;
   }
   function open() { msg.textContent = ''; sync(); wrap.hidden = false; }
@@ -451,9 +439,8 @@ const Menu = (() => {
   $('#menu-close').addEventListener('click', close);
   $('#menu-scrim').addEventListener('click', close);
   wrap.addEventListener('click', e => {
-    const s = e.target.closest('[data-sound]'), v = e.target.closest('[data-speed]');
+    const s = e.target.closest('[data-sound]');
     if (s) { settings.sound = s.dataset.sound === 'on'; saveSettings(); sync(); }
-    if (v) { settings.speed = v.dataset.speed; saveSettings(); sync(); }
   });
   $('#export').addEventListener('click', async () => {
     const list = [...entries.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -504,6 +491,11 @@ const Menu = (() => {
   Cal.render();
   Sound.init(); // 音を先に読み込んでおく（鳴らせるのは最初のタッチの後）
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    // 新しい版が届いたら、書いている途中でなければその場で切り替える（書いている時は次に開いた時）
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && current !== 'edit') location.reload();
+    });
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 })();
