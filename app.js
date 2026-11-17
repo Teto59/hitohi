@@ -98,7 +98,7 @@ const DB = (() => {
 const entries = new Map(); // date -> {date, text, created, updated}
 
 /* ───────────── 設定 ───────────── */
-const settings = { soundLevel: 'low', lastExport: 0 };
+const settings = { soundLevel: 'low', lead: '2B', lastExport: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem('hitohi-settings') || '{}');
   if (saved.sound === false && !saved.soundLevel) saved.soundLevel = 'off'; // 以前の「鳴らさない」を引き継ぐ
@@ -115,21 +115,54 @@ const saveSettings = () => { try { localStorage.setItem('hitohi-settings', JSON.
  *  - 音量は控えめが基本。高いシャリつきを削って、柔らかい音色にする。
  * 録音は「サッ・サーッ・サッ」の一続き（0.29秒）。そこから筆の長さに合わせて区間を選ぶ。 */
 const Sound = (() => {
-  const LEVEL = { off: 0, low: 0.5, mid: 1.0 };
-  const SEG = { short: [0.022, 0.100], mid: [0.118, 0.282], full: [0.022, 0.285] };
-  let ctx = null, bus = null, buf = null, loading = null;
-  let busyUntil = 0, flowUntil = 0, timer = null;
+  /* 音の大きさ（一番最後に掛ける）。加工後の一筆の実効値（約 -24dBFS）を基準に、
+   * 小さく＝約 -35dBFS、ふつう＝約 -29dBFS になるように測って決めた値 */
+  const LEVEL = { off: 0, low: 0.285, mid: 0.57 };
+  /* 書き味（鉛筆の濃さ）。どれも同じ録音から作り、大きさは測ってそろえてある（gain）。
+   *  HB：軽く乾いた音／2B：柔らかい（標準）／4B：深く太い
+   *  rate＝高さ、hp/lp＝残す音の幅、body＝紙と芯がこすれる中音の持ち上げ(dB)、room＝机の上の響きの量 */
+  const LEAD = {
+    HB:   { rate: 1.05, hp: 230, lp: 5600, body: 0.5, room: 0.05, gain: 1.07 },
+    '2B': { rate: 0.97, hp: 150, lp: 3800, body: 2.5, room: 0.09, gain: 1.00 },
+    '4B': { rate: 0.88, hp: 100, lp: 2600, body: 4.0, room: 0.13, gain: 0.94 },
+  };
+  // 録音（サッ・サーッ・サッ）の中で、鉛筆が紙を離れるところまで自然に書き終わる二つの区間。途中では切らない
+  const TAKES = [[0.022, 0.285], [0.118, 0.285]];
+  let ctx = null, input, hp, body, lp, comp, makeup, out, room, buf = null, loading = null;
+  let lastStart = -1, lastTake = -1, busyUntil = 0, flowUntil = 0, timer = null;
+  const lead = () => LEAD[settings.lead] || LEAD['2B'];
 
+  // ごく短い部屋の響き（0.3秒）。机の上で書いている距離感を出す
+  function roomImpulse() {
+    const n = Math.floor(ctx.sampleRate * 0.3), ir = ctx.createBuffer(2, n, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = ir.getChannelData(c);
+      let z = 0;
+      for (let i = 0; i < n; i++) { z = z * 0.72 + (Math.random() * 2 - 1) * 0.28; d[i] = z * Math.exp(-(i / ctx.sampleRate) / 0.065); }
+    }
+    return ir;
+  }
   function init() {
     if (!ctx) {
       try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) {} // マナーモードに従い、音楽も止めない
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
       ctx = new AC();
-      bus = ctx.createGain(); bus.gain.value = LEVEL[settings.soundLevel] ?? LEVEL.low;
-      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 160;           // こもった低音を除く
-      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4200; lp.Q.value = 0.5; // 耳に刺さる高音を丸める
-      bus.connect(hp); hp.connect(lp); lp.connect(ctx.destination);
+      // 一筆 → 低い雑音を除く → 中音を少し持ち上げる → 刺さる高音を丸める → 粒をそろえる → 書き味の補正 → 大きさ → 出力（＋わずかな響き）
+      // 大きさを最後に掛けるのは、粒をそろえる処理（コンプレッサー）の効き方を、大きさの設定で変えないため
+      input = ctx.createGain();
+      hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.Q.value = 0.6;
+      body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 650; body.Q.value = 0.9;
+      lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.6;
+      comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -28; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.003; comp.release.value = 0.12;
+      makeup = ctx.createGain();
+      out = ctx.createGain();
+      const verb = ctx.createConvolver(); verb.buffer = roomImpulse();
+      room = ctx.createGain();
+      input.connect(hp); hp.connect(body); body.connect(lp); lp.connect(comp); comp.connect(makeup); makeup.connect(out);
+      out.connect(ctx.destination); out.connect(verb); verb.connect(room); room.connect(ctx.destination);
+      apply(true);
       loading = fetch('sound/scribble.mp3').then(r => r.arrayBuffer())
         .then(b => new Promise((ok, ng) => ctx.decodeAudioData(b, ok, ng)))
         .then(b => (buf = b)).catch(() => null);
@@ -137,31 +170,45 @@ const Sound = (() => {
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
     return loading;
   }
-  function setLevel(level) { if (bus) bus.gain.setTargetAtTime(LEVEL[level] ?? 0, ctx.currentTime, 0.02); }
+  // 設定（大きさ・書き味）を音の通り道に反映する
+  function apply(now) {
+    if (!ctx) return;
+    const L = lead(), t = ctx.currentTime, k = now ? 0.001 : 0.03;
+    out.gain.setTargetAtTime(LEVEL[settings.soundLevel] ?? 0, t, k);
+    hp.frequency.setTargetAtTime(L.hp, t, k);
+    body.gain.setTargetAtTime(L.body, t, k);
+    lp.frequency.setTargetAtTime(L.lp, t, k);
+    makeup.gain.setTargetAtTime(L.gain, t, k);
+    room.gain.setTargetAtTime(L.room, t, k);
+  }
   function ready() {
     if (settings.soundLevel === 'off' || !ctx || !buf) return false;
     if (ctx.state !== 'running') ctx.resume().catch(() => {}); // 音声入力の後などに止められていたら起こす
     return true;
   }
-  // 一筆を t 秒に鳴らす。高さ・強さは毎回少し変える
-  function voice([a, b], t) {
-    const rate = 0.94 + Math.random() * 0.12, len = (b - a) / rate;
+  // 一筆を t 秒に鳴らす。二つの区間を気まぐれに使い分け、高さ・強さはごくわずかに揺らす（同じ鉛筆のまま）
+  function voice(t) {
+    let k = Math.random() < 0.6 ? 0 : 1;
+    if (k === lastTake && Math.random() < 0.5) k = 1 - k;
+    lastTake = k;
+    const [a0, b] = TAKES[k], a = a0 + Math.random() * 0.006;
+    const rate = lead().rate * (0.97 + Math.random() * 0.06), len = (b - a) / rate;
     const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
-    const g = ctx.createGain(), peak = 0.75 + Math.random() * 0.25;
+    const g = ctx.createGain(), peak = 0.82 + Math.random() * 0.18;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + 0.012);
-    g.gain.setValueAtTime(peak, Math.max(t + 0.014, t + len - 0.05));
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
+    g.gain.setValueAtTime(peak, t + len - 0.04);
     g.gain.exponentialRampToValueAtTime(0.0001, t + len);
-    src.connect(g); g.connect(bus);
+    src.connect(g); g.connect(input);
     src.start(t, a, b - a);
-    busyUntil = t + len;
+    lastStart = t; busyUntil = t + len;
   }
-  // 一語一筆：n は確定した言葉の字数
-  function stroke(n) {
-    if (n <= 0 || !ready()) return;
+  // 一語一筆：確定のたびに一回。あまりに速く続いた時（0.12秒以内）だけ省く。前の一筆の終わりには重ねてよい
+  function stroke() {
+    if (!ready()) return;
     const now = ctx.currentTime;
-    if (now < busyUntil - 0.04) return; // 前の一筆がまだ鳴っている
-    voice(n <= 2 ? SEG.short : n <= 5 ? SEG.mid : SEG.full, now + 0.01);
+    if (now - lastStart < 0.12) return;
+    voice(now + 0.01);
   }
   // 音声入力：字が現れている間だけ、一筆ずつ間を空けて書く
   function flow(ms) {
@@ -174,11 +221,11 @@ const Sound = (() => {
     if (now >= flowUntil) { clearInterval(timer); timer = null; return; }
     if (busyUntil < now + 0.06) {
       const t = Math.max(now + 0.01, busyUntil + 0.04 + Math.random() * 0.08);
-      if (t < flowUntil) voice(SEG.full, t);
+      if (t < flowUntil) voice(t);
     }
   }
   function lift() { flowUntil = 0; } // 鉛筆を上げる（今の一筆は最後まで）
-  return { init, stroke, flow, lift, setLevel };
+  return { init, stroke, flow, lift, apply, LEAD };
 })();
 // iOSは最初のタッチまで音を鳴らせないので、最初の操作で準備する
 ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, () => Sound.init(), { capture: true, passive: true }));
@@ -561,6 +608,10 @@ const Menu = (() => {
   const wrap = $('#menu'), msg = $('#io-msg');
   function sync() {
     wrap.querySelectorAll('[data-level]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.level === settings.soundLevel)));
+    wrap.querySelectorAll('[data-lead]').forEach(b => {
+      b.setAttribute('aria-pressed', String(b.dataset.lead === settings.lead));
+      b.disabled = settings.soundLevel === 'off';
+    });
     $('#count').textContent = `これまでに綴った日　${entries.size}日`;
     $('#last-export').textContent = settings.lastExport
       ? `最後に控えを書き出した日　${dateLabelW(new Date(settings.lastExport))}`
@@ -578,12 +629,15 @@ const Menu = (() => {
   $('#menu-open').addEventListener('click', open);
   $('#menu-close').addEventListener('click', close);
   $('#menu-scrim').addEventListener('click', close);
+  // 音の大きさ・書き味を選ぶと、その音で試しに一筆
   wrap.addEventListener('click', e => {
-    const b = e.target.closest('[data-level]');
-    if (!b) return;
-    settings.soundLevel = b.dataset.level; saveSettings(); sync();
-    Sound.init(); Sound.setLevel(settings.soundLevel);
-    setTimeout(() => Sound.stroke(4), 60); // 選んだ大きさで、試しに一筆
+    const lv = e.target.closest('[data-level]'), ld = e.target.closest('[data-lead]');
+    if (!lv && !ld) return;
+    if (lv) settings.soundLevel = lv.dataset.level;
+    if (ld) settings.lead = ld.dataset.lead;
+    saveSettings(); sync();
+    Sound.init(); Sound.apply();
+    setTimeout(() => Sound.stroke(), 80);
   });
   $('#export').addEventListener('click', async () => {
     const list = [...entries.values()].sort((a, b) => a.date.localeCompare(b.date));

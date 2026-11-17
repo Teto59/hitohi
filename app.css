@@ -240,6 +240,8 @@ button:focus-visible, label:focus-within { outline: 1.5px solid var(--shu); outl
 .seg { display: inline-flex; border: 1px solid var(--hair); border-radius: 999px; overflow: hidden; }
 .seg button { font-size: 14px; padding: 8px 14px; color: var(--ink-soft); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.seg button:disabled { opacity: .4; }
+.seg button[data-lead] { min-width: 52px; font-family: var(--f-hand); font-weight: 600; letter-spacing: .04em; }
 .note { margin: 0; font-size: 13px; color: var(--ink-soft); line-height: 1.7; }
 .btns { display: flex; gap: 10px; flex-wrap: wrap; }
 .btns.end { justify-content: flex-end; }
