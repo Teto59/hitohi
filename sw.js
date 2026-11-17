@@ -1,7 +1,7 @@
 /* ひとひ：オフラインで動かすための仕組み
  * アプリ本体は端末に保存し、次に開いた時から通信なしで起動する。
  * 書体は使った分だけ保存していく。新しい版は裏で取り込み、次に開いた時に切り替わる。 */
-const VERSION = 'hitohi-v7'; // 中身を変えたら必ず上げる
+const VERSION = 'hitohi-v8'; // 中身を変えたら必ず上げる
 const SHELL = [
   './', './index.html', './app.css', './app.js', './manifest.webmanifest',
   './sound/scribble.mp3', './icons/icon-180.png', './icons/icon-192.png',

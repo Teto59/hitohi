@@ -109,8 +109,9 @@ const saveSettings = () => { try { localStorage.setItem('hitohi-settings', JSON.
 
 /* ───────────── 鉛筆の音 ─────────────
  * 設計の芯：「音は、書いたことに対して鳴らす」。指の操作（打鍵）には反応しない。
- *  - 確定のたびに三画：変換して確定した言葉ひとつごとに、鉛筆で三画書く音（言葉の長さによらない）。
- *  - 三画には入り・山・抜きの抑揚。書く順と間合いは毎回少しだけ変え、かすかに左から右へ動かす。
+ *  - 確定のたびに、書き音（録音のひとまとまり）を3回分、切れ目なく一続きに（約0.6秒）。言葉の長さによらない。
+ *  - 切れ目を作らない：前の書き音が消えきる前に次を重ねて書き始める。出だしと終わりはなだらかに。
+ *  - 3回の中で区間・高さ・強さを少しずつ変え、同じ音の繰り返しに聞こえないようにする。
  *  - 改行・空白・句読点だけ・消す・変換候補の切り替え・貼り付け・取り消しでは鳴らさない（呼ぶ側で判断）。
  *  - 音量は控えめが基本。音色は書き味（HB・2B・4B）で選べる。 */
 const Sound = (() => {
@@ -125,13 +126,15 @@ const Sound = (() => {
     '2B': { rate: 0.97, hp: 150, lp: 3800, body: 2.5, room: 0.09, gain: 1.00 },
     '4B': { rate: 0.88, hp: 100, lp: 2600, body: 4.0, room: 0.13, gain: 0.94 },
   };
-  /* 録音は「サッ・サーッ・ッ」の三画でできている。画と画の間の静かな所（-50dB 前後）で区切って、一画ずつ使う。
-   * 区切りは静かな所なので、どの画も途中で切れた音にならない */
-  const STROKES = [[0.022, 0.108], [0.116, 0.214], [0.219, 0.285]];
-  // 三画は元の大きさがばらばら（実効値 -39／-29／-42dB）。どれも約 -32dB にそろえてから抑揚を付ける
-  const NORM = [2.3, 0.72, 3.3];
-  const ORDERS = [[0, 1, 2], [0, 1, 2], [0, 1, 2], [1, 0, 2], [0, 2, 1], [2, 1, 0]]; // 書く順（多くは録音どおりの自然な順）
-  const SHAPE = [0.86, 1.0, 0.7]; // 三画の強さ：入り・山・抜き
+  /* 書き音は録音を丸ごと使う（分解しない）。自然に始まり自然に終わる二つの区間：
+   *  F＝頭から（サッ・サーッ・ッ）、L＝二画目から（サーッ・ッ） */
+  const TAKES = [[0.022, 0.285], [0.116, 0.285]];
+  // 3回の並べ方（F/L）。毎回少し変えて、同じ繰り返しに聞こえないように
+  const SEQS = [[0, 1, 0], [0, 0, 1], [1, 0, 0], [0, 1, 1], [0, 0, 0], [1, 0, 1]];
+  const SHAPE = [0.9, 1.0, 0.84]; // 3回の強さ：入り・山・抜き（差は小さく、なめらかに）
+  // 前の書き音の終わりに、次の書き始めを重ねる長さ（秒）。0.05秒以上でつなぎ目の沈みが消える（測定）。
+  // 残る20msほどの沈みは録音の中で鉛筆が一瞬浮く所で、書き音の持ち味なので残す
+  const OVERLAP = 0.065;
   let ctx = null, input, hp, body, lp, comp, makeup, out, room, buf = null, loading = null;
   let queued = [], ringUntil = 0, flowUntil = 0, timer = null;
   const lead = () => LEAD[settings.lead] || LEAD['2B'];
@@ -190,36 +193,35 @@ const Sound = (() => {
     if (ctx.state !== 'running') ctx.resume().catch(() => {}); // 音声入力の後などに止められていたら起こす
     return true;
   }
-  // 一画を t 秒に鳴らす。gain＝強さ、pan＝左右の位置。高さはごくわずかに揺らす（同じ鉛筆のまま）
-  function strokeAt(i, t, gain, pan) {
-    const [a, b] = STROKES[i];
-    gain *= NORM[i];
-    const rate = lead().rate * (0.97 + Math.random() * 0.06), len = (b - a) / rate;
+  // 書き音を一つ、t 秒から鳴らす。ふわっと入り（15ms）、すっと消える（60ms）。高さはごくわずかに揺らす
+  function takeAt(k, t, gain, pan) {
+    const [a0, b] = TAKES[k], a = a0 + Math.random() * 0.006;
+    const rate = lead().rate * (0.975 + Math.random() * 0.05), len = (b - a) / rate;
     const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.004);
-    g.gain.setValueAtTime(gain, t + len - 0.014);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.015);
+    g.gain.setValueAtTime(gain, t + len - 0.06);
     g.gain.exponentialRampToValueAtTime(0.0001, t + len);
     src.connect(g);
     if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = pan; g.connect(p); p.connect(input); }
     else g.connect(input);
     src.start(t, a, b - a);
     queued.push({ src, t, end: t + len });
+    ringUntil = Math.max(ringUntil, t + len);
     return len;
   }
-  // 三画を t 秒から書く。入り・山・抜きの抑揚を付け、順番と間合いは毎回少しだけ変える
+  // 書き音を3回、t 秒から切れ目なく。前の書き音が消えきる前に次を重ねる
   function phraseAt(t) {
-    const order = ORDERS[Math.floor(Math.random() * ORDERS.length)];
-    const pan0 = -0.14 + Math.random() * 0.04;
-    order.forEach((i, j) => {
-      const len = strokeAt(i, t, SHAPE[j] * (0.92 + Math.random() * 0.16), pan0 + j * 0.12);
-      ringUntil = t + len;
-      t += len + 0.045 + Math.random() * 0.05; // 画と画の間（手が次の画へ移る間）
+    const seq = SEQS[Math.floor(Math.random() * SEQS.length)];
+    const pan0 = -0.08 + Math.random() * 0.03;
+    seq.forEach((k, j) => {
+      const len = takeAt(k, t, SHAPE[j] * (0.94 + Math.random() * 0.12), pan0 + j * 0.08);
+      t += len - OVERLAP - Math.random() * 0.015;
     });
   }
-  // 確定のたびに三画（言葉の長さによらない）。
-  // 前の三画がまだ途中なら、鳴っている画は最後まで鳴らし、まだ鳴り始めていない画だけ取りやめて、続けて書く
+  // 確定のたびに3回分（言葉の長さによらない）。
+  // 前のがまだ鳴っていれば、鳴っている書き音は最後まで鳴らし、まだ鳴り始めていないものだけ取りやめて、切れ目なく続ける
   function phrase() {
     if (!ready()) return;
     const now = ctx.currentTime;
@@ -227,10 +229,10 @@ const Sound = (() => {
       if (q.t > now + 0.004) { try { q.src.stop(); } catch (e) {} return false; }
       return q.end > now;
     });
-    const ringing = queued.length ? Math.max(...queued.map(q => q.end)) : 0;
-    phraseAt(Math.max(now + 0.01, ringing - 0.01));
+    ringUntil = queued.length ? Math.max(...queued.map(q => q.end)) : 0;
+    phraseAt(Math.max(now + 0.01, ringUntil - OVERLAP));
   }
-  // 音声入力：字が現れている間だけ、三画ずつ、少し間を空けて書く
+  // 音声入力：字が現れている間だけ、切れ目なく書き続ける
   function flow(ms) {
     if (!ready()) return;
     flowUntil = Math.max(flowUntil, ctx.currentTime + ms / 1000);
@@ -240,12 +242,12 @@ const Sound = (() => {
     const now = ctx.currentTime;
     queued = queued.filter(q => q.end > now);
     if (now >= flowUntil) { clearInterval(timer); timer = null; return; }
-    if (ringUntil < now + 0.06) {
-      const t = Math.max(now + 0.01, ringUntil + 0.12 + Math.random() * 0.1);
+    if (ringUntil < now + 0.12) {
+      const t = Math.max(now + 0.01, ringUntil - OVERLAP);
       if (t < flowUntil) phraseAt(t);
     }
   }
-  function lift() { flowUntil = 0; } // 鉛筆を上げる（今の一画は最後まで）
+  function lift() { flowUntil = 0; } // 鉛筆を上げる（今鳴っている書き音は最後まで）
   return { init, phrase, flow, lift, apply, LEAD };
 })();
 // iOSは最初のタッチまで音を鳴らせないので、最初の操作で準備する
