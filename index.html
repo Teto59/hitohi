@@ -61,35 +61,40 @@
   </section>
 
   <!-- 読み返す -->
-  <section id="read" class="screen" aria-label="読み返す" hidden>
+  <section id="read" class="screen paged" aria-label="読み返す" hidden>
     <header class="bar">
-      <button class="back" id="read-back" type="button">‹ 暦</button>
       <h1 class="date" id="read-date"></h1>
-      <span class="bar-sp"></span>
     </header>
     <article class="sheet">
       <div class="hand" id="read-hand"></div>
     </article>
-    <footer class="read-foot">
-      <button class="link" id="fix" type="button">なおす</button>
-    </footer>
   </section>
 
   <!-- 書く -->
-  <section id="edit" class="screen" aria-label="書く" hidden>
+  <section id="edit" class="screen paged" aria-label="書く" hidden>
     <header class="bar">
-      <button class="back" id="edit-back" type="button">‹ 暦</button>
       <h1 class="date" id="edit-date"></h1>
-      <button class="done" id="done" type="button">綴じる</button>
     </header>
     <div class="sheet edit-sheet">
       <div class="mirror" id="mirror" aria-hidden="true"></div>
       <textarea id="ed" rows="6" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="今日のこと"></textarea>
-      <p class="placeholder" id="ph">キーボードのマイクを押して、<br>今日のことを話してください。</p>
+      <p class="placeholder" id="ph">キーボードのマイクで話すか、<br>指で打って、今日のことを綴ってください。</p>
     </div>
   </section>
 
 </main>
+
+<!-- 下の操作帯：いつも親指の届く所（キーボードが出ている時は、そのすぐ上）に置く -->
+<nav class="dock" id="edit-dock" aria-label="書く画面の操作" hidden>
+  <button class="dock-l" id="edit-back" type="button">‹ 暦</button>
+  <span class="dock-c" id="edit-count" aria-live="off"></span>
+  <button class="dock-r done" id="done" type="button">綴じる</button>
+</nav>
+<nav class="dock" id="read-dock" aria-label="読む画面の操作" hidden>
+  <button class="dock-l" id="read-back" type="button">‹ 暦</button>
+  <span class="dock-c" id="read-count"></span>
+  <button class="dock-r done" id="fix" type="button">なおす</button>
+</nav>
 
 <!-- 栞（設定） -->
 <div class="sheet-wrap" id="menu" hidden>

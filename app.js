@@ -19,6 +19,9 @@ const kanjiYear = y => String(y).split('').map(c => KN[+c]).join('');
 const WAFU = ['睦月', '如月', '弥生', '卯月', '皐月', '水無月', '文月', '葉月', '長月', '神無月', '霜月', '師走'];
 const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 const dateLabel = d => `${kanjiNum(d.getMonth() + 1)}月${kanjiNum(d.getDate())}日`;
+const dateLabelW = d => `${dateLabel(d)}（${WEEK[d.getDay()]}）`;
+// 字数（改行や空白は数えない）
+const countChars = arr => { let n = 0; for (const c of arr) if (!/\s/.test(c)) n++; return n ? `${n}字` : ''; };
 
 // 太陽黄経（簡易式）から二十四節気を求める
 const jdOf = ms => ms / 86400000 + 2440587.5;
@@ -119,11 +122,37 @@ const Sound = (() => {
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
     return loading;
   }
-  // chars: 文字、ds: 各文字の間隔(ms)
-  function play(chars, ds) {
-    if (!settings.sound || !ctx || !buf) return null;
+  function ready() {
+    if (!settings.sound || !ctx || !buf) return false;
     // 音声入力の後などは iPhone が音を止めた状態にするので、鳴らす前に起こす
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
+    return true;
+  }
+  // 一画だけ鳴らす（フリックの一打）。[始まり, 終わり, 強さ]
+  function grain(a, b, gain) {
+    const rate = 0.92 + Math.random() * 0.18, len = (b - a) / rate, st = ctx.currentTime + 0.005;
+    const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+    const g = ctx.createGain(), peak = gain * (0.75 + Math.random() * 0.25);
+    g.gain.setValueAtTime(0.0001, st);
+    g.gain.exponentialRampToValueAtTime(peak, st + 0.005);
+    g.gain.setValueAtTime(peak, st + Math.max(0.008, len - 0.015));
+    g.gain.exponentialRampToValueAtTime(0.0001, st + len);
+    src.connect(g); g.connect(master); src.start(st, a, b - a);
+  }
+  // フリックで一字打った：短い「サッ」。句読点は点を打つような小さな「トッ」。打ち替え（濁点など）はごく軽く
+  let lastShort = -1;
+  function tap(ch, light) {
+    if (!ready()) return;
+    if (ch === '、' || ch === '。' || ch === '，' || ch === '．') { grain(0.024, 0.056, 0.55); return; }
+    if (PUNCT.includes(ch)) return;
+    const k = lastShort === 0 ? 2 : lastShort === 2 ? 0 : (Math.random() < 0.5 ? 0 : 2); // 短い二画を交互に
+    lastShort = k;
+    const [a, b] = STROKES[k];
+    grain(a, light ? a + (b - a) * 0.55 : b, light ? 0.4 : 0.85);
+  }
+  // まとめて入った字（音声入力など）：chars: 文字、ds: 各文字の間隔(ms)
+  function play(chars, ds) {
+    if (!ready()) return null;
     const bus = ctx.createGain(); bus.connect(master);
     const srcs = [], t0 = ctx.currentTime + 0.02;
     let t = 0, free = 0, last = -1;
@@ -157,7 +186,7 @@ const Sound = (() => {
       h.srcs.forEach(s => { try { s.stop(t + 0.07); } catch (e) {} });
     } catch (e) {}
   }
-  return { init, play, stop };
+  return { init, play, tap, stop };
 })();
 // iOSは最初のタッチまで音を鳴らせないので、最初の操作で準備する
 ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, () => Sound.init(), { capture: true, passive: true }));
@@ -203,6 +232,8 @@ function show(name, push = true) {
   if (current === 'edit' && name !== 'edit') Editor.close();
   if (current === 'read' && name !== 'read') Reader.stop();
   Object.entries(screens).forEach(([k, el]) => { el.hidden = k !== name; });
+  $('#edit-dock').hidden = name !== 'edit';
+  $('#read-dock').hidden = name !== 'read';
   const el = screens[name];
   el.classList.remove('enter'); void el.offsetWidth; el.classList.add('enter');
   current = name;
@@ -244,7 +275,9 @@ const Cal = (() => {
     grid.innerHTML = html;
     stampKey = null;
     $('#sekki').textContent = terms.join('　·　');
-    $('#next').style.visibility = (y > t.getFullYear() || (y === t.getFullYear() && m >= t.getMonth())) ? 'hidden' : 'visible';
+    const atNow = y === t.getFullYear() && m === t.getMonth();
+    $('#next').style.visibility = (y > t.getFullYear() || atNow) ? 'hidden' : 'visible';
+    $('#go-today').style.visibility = atNow ? 'hidden' : 'visible'; // 今月を見ている時は出さない
     if (dir) { grid.classList.remove('turn-l', 'turn-r'); void grid.offsetWidth; grid.classList.add(dir > 0 ? 'turn-l' : 'turn-r'); }
   }
   function move(n) {
@@ -270,10 +303,8 @@ const Cal = (() => {
   $('#prev').addEventListener('click', () => move(-1));
   $('#next').addEventListener('click', () => move(1));
   $('#go-today').addEventListener('click', () => { set(startOfToday()); render(); });
-  $('#write-today').addEventListener('click', () => {
-    const k = keyOf(startOfToday());
-    if (entries.has(k)) Reader.open(k); else Editor.open(k);
-  });
+  // 「書く」はいつも今日の頁を開いて、続きから書ける状態にする
+  $('#write-today').addEventListener('click', () => Editor.open(keyOf(startOfToday())));
   return { set, render, stamp: k => { stampKey = k; set(fromKey(k)); } };
 })();
 
@@ -283,9 +314,13 @@ const Reader = (() => {
   const hand = $('#read-hand');
   function open(k, push = true) {
     viewDate = k;
-    $('#read-date').textContent = dateLabel(fromKey(k));
+    const date = $('#read-date');
+    date.textContent = dateLabelW(fromKey(k));
+    date.insertAdjacentHTML('beforeend', sealSVG(k, false));
     show('read', push);
-    renderHand(hand, entries.get(k).text, k);
+    const text = entries.get(k).text;
+    renderHand(hand, text, k);
+    $('#read-count').textContent = countChars(Array.from(text));
   }
   function stop() {}
   $('#fix').addEventListener('click', () => Editor.open(viewDate));
@@ -302,7 +337,7 @@ function goCal() {
  * 見えない入力欄（textarea）の上に、手書きの写しを重ねて表示する。
  * 音声入力などで増えた文字だけ、鉛筆の音と一緒に一文字ずつ現れる。 */
 const Editor = (() => {
-  const ed = $('#ed'), mirror = $('#mirror'), ph = $('#ph');
+  const ed = $('#ed'), mirror = $('#mirror'), ph = $('#ph'), count = $('#edit-count');
   const tail = document.createTextNode('​'); // 最後の改行の後も高さを保つための印
   let key = null, existedBefore = false, stable = [], shown = [], nodes = [], composing = false, saveTimer = null, snd = null;
 
@@ -329,6 +364,7 @@ const Editor = (() => {
     const shrank = now.length < shown.length;
     shown = now;
     ph.hidden = now.length > 0;
+    count.textContent = countChars(now);
     // 入力欄の高さを中身に合わせる（縮む時だけ一度リセット）
     if (shrank) ed.style.height = 'auto';
     if (shrank || ed.scrollHeight > ed.clientHeight + 1) ed.style.height = ed.scrollHeight + 'px';
@@ -340,40 +376,87 @@ const Editor = (() => {
     ed.style.height = 'auto';
     sync(Array.from(text));
   }
-  // 入力が確定した：前回確定した文字列と比べ、新しく入った字だけを鉛筆の音とともに書く
-  function settle() {
+  /* 入力が確定した（変換の確定・音声入力・貼り付け・英字など）
+   * フリックで打った字は打った時にもう音を鳴らしているので、確定では鳴らさない。
+   * 音声入力のようにまとめて入った字だけ、一文字ずつ鉛筆の音とともに書く。 */
+  let typedInComposition = false;
+  function settle(inputType) {
     const now = Array.from(ed.value);
     sync(now);
     const [s, e] = diff(stable, now), insEnd = now.length - e, n = insEnd - s;
-    if (n > 0) {
-      const ds = schedule(n, 's1', 6);
-      let acc = 0;
-      for (let i = s; i < insEnd; i++) {
-        const el = nodes[i];
-        el.className = 'm';
-        el.style.setProperty('--dl', acc.toFixed(0) + 'ms');
-        void el.offsetWidth; // 動きを最初から
-        el.className = 'm new';
-        acc += ds[i - s];
+    nodes.forEach(el => el.classList.remove('draft'));
+    const fromTyping = typedInComposition;
+    typedInComposition = false;
+    if (n > 0 && !fromTyping) {
+      const paste = inputType === 'insertFromPaste' || inputType === 'insertFromDrop';
+      if (paste) {
+        for (let i = s; i < insEnd; i++) nodes[i].className = 'm new';
+      } else if (n === 1) {
+        nodes[s].className = 'm new';
+        Sound.tap(now[s]);
+      } else {
+        const ds = schedule(n, 's1', 6);
+        let acc = 0;
+        for (let i = s; i < insEnd; i++) {
+          const el = nodes[i];
+          el.style.setProperty('--dl', acc.toFixed(0) + 'ms');
+          el.className = 'm new';
+          acc += ds[i - s];
+        }
+        snd = Sound.play(now.slice(s, insEnd), ds); // 前の音は止めずに最後まで鳴らす
       }
-      Sound.stop(snd);
-      snd = Sound.play(now.slice(s, insEnd), ds);
     }
     stable = now;
     queueSave();
+    keepCaret();
   }
   ed.addEventListener('compositionstart', () => { composing = true; });
-  ed.addEventListener('compositionend', () => { composing = false; settle(); });
+  ed.addEventListener('compositionend', () => { composing = false; settle('composition'); });
   ed.addEventListener('input', e => {
-    if (composing || e.isComposing) {
-      // 変換中の字は薄く表示しておく
-      const now = Array.from(ed.value);
-      sync(now);
-      const [s, e2] = diff(stable, now);
-      for (let i = s; i < now.length - e2; i++) nodes[i].className = 'm draft';
-    } else settle();
+    const isComp = composing || e.isComposing || e.inputType === 'insertCompositionText';
+    if (!isComp) { settle(e.inputType); return; }
+    // フリックで打っている最中（変換前）
+    typedInComposition = true;
+    const now = Array.from(ed.value), prev = shown;
+    const [s, e2] = diff(prev, now), removed = prev.length - e2 - s, added = now.length - e2 - s;
+    sync(now);
+    // 打った字はすぐ濃く書く。変換前の印として点線の下線だけ付ける
+    const [ds, de] = diff(stable, now);
+    for (let i = ds; i < now.length - de; i++) nodes[i].classList.add('draft');
+    for (let i = s; i < s + added; i++) nodes[i].classList.add('quick');
+    if (added > removed) {
+      // 新しく一字（または数字）打った → 一画ずつ「サッ」
+      const fresh = now.slice(s + removed, s + added);
+      // 一字目は指の動きとずれないよう即座に。続く字は少しずつずらす
+      fresh.slice(0, 3).forEach((ch, i) => (i ? setTimeout(() => Sound.tap(ch), i * 45) : Sound.tap(ch)));
+    } else if (added > 0 && added === removed && added <= 2) {
+      Sound.tap(now[s], true); // 打ち替え（か→き、濁点、小さい字）はごく軽く
+    } // 漢字への変換など、字数が減る時は鳴らさない
+    keepCaret();
   });
-  $('.edit-sheet').addEventListener('click', e => { if (e.target !== ed) ed.focus(); });
+  $('.edit-sheet').addEventListener('click', e => {
+    if (e.target === ed) return;
+    ed.focus();
+    const L = ed.value.length; ed.setSelectionRange(L, L);
+    keepCaret();
+  });
+
+  // 入力している位置が、キーボードや下の操作帯に隠れないように少しだけ動かす
+  const dock = $('#edit-dock');
+  function keepCaret() {
+    requestAnimationFrame(() => {
+      if (current !== 'edit' || document.activeElement !== ed) return;
+      const i = Array.from(ed.value.slice(0, ed.selectionEnd)).length;
+      const n = nodes[i - 1] || nodes[i];
+      const r = n ? n.getBoundingClientRect() : ed.getBoundingClientRect();
+      const afterBreak = shown[i - 1] === '\n';
+      const top = afterBreak ? r.bottom : r.top, bottom = afterBreak ? r.bottom + 40 : r.bottom;
+      const vv = window.visualViewport, vt = vv ? vv.offsetTop : 0, vh = vv ? vv.height : innerHeight;
+      const limit = vt + vh - dock.offsetHeight - 16;
+      if (bottom > limit) window.scrollBy(0, bottom - limit);
+      else if (top < vt + 70) window.scrollBy(0, top - vt - 70);
+    });
+  }
 
   function queueSave() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 500); }
   async function save() {
@@ -398,11 +481,13 @@ const Editor = (() => {
     const text = existedBefore ? entries.get(k).text : '';
     ed.value = text;
     stable = Array.from(text);
-    $('#edit-date').textContent = dateLabel(fromKey(k));
+    $('#edit-date').textContent = dateLabelW(fromKey(k));
     show('edit');
     rebuild(text);
-    // 開いてすぐキーボードを出す（iPhoneはタップの処理の中で focus しないとキーボードが出ない）
+    // 開いてすぐキーボードを出し、続きを書く位置（末尾）へ。
+    // iPhoneはタップの処理の中で focus しないとキーボードが出ない
     try { ed.focus({ preventScroll: true }); const L = ed.value.length; ed.setSelectionRange(L, L); } catch (e) {}
+    keepCaret();
   }
   function close() { Sound.stop(snd); snd = null; ed.blur(); save(); }
   async function finish() {
@@ -423,8 +508,20 @@ const Editor = (() => {
   // アプリを閉じる・切り替える時も保存
   document.addEventListener('visibilitychange', () => { if (document.hidden && current === 'edit') save(); });
   window.addEventListener('pagehide', () => { if (current === 'edit') save(); });
-  return { open, close };
+  return { open, close, keepCaret };
 })();
+
+/* ───────────── キーボードに合わせて下の操作帯を動かす ───────────── */
+function placeDocks() {
+  const vv = window.visualViewport;
+  const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+  document.documentElement.style.setProperty('--kb', kb + 'px');
+  document.documentElement.classList.toggle('kb-open', kb > 80);
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', () => { placeDocks(); if (current === 'edit') Editor.keepCaret(); });
+  visualViewport.addEventListener('scroll', placeDocks);
+}
 
 /* ───────────── 栞（設定・控え） ───────────── */
 const Menu = (() => {
