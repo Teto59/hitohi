@@ -1,11 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { BETA, day, expect, openApp, PROD, readDB, test, TODAY, TODAY_KEY, typeText } from './helpers';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { BETA, day, expect, openApp, PROD, readDB, serveProduction, test, TODAY, TODAY_KEY, typeText } from './helpers';
 
 /* 本物の v1（v1/ フォルダ。いま本番に出ているもの）で日記を書き、
  * 本番を v2 に切り替えた後（Cookie で配信を v2 の本番版に切り替えて再現）、同じ端末で全部読めるかを確かめる。 */
 
-const switchToV2 = (page: import('@playwright/test').Page) =>
-  page.context().addCookies([{ name: 'hitohi-prod', value: 'v2', url: 'http://localhost:4173' }]);
+const switchToV2 = (page: import('@playwright/test').Page) => serveProduction(page.context(), 'v2');
 
 /** v1 の画面で、その日の日記を書いて綴じる */
 async function writeWithV1(page: import('@playwright/test').Page, k: string | null, text: string) {
@@ -17,15 +17,24 @@ async function writeWithV1(page: import('@playwright/test').Page, k: string | nu
   await expect(page.locator('#cal')).toBeVisible();
 }
 
-test('いま本番に出ているのは v1 そのもの（v1/ フォルダの中身と同じ）', async ({ page }) => {
-  for (const f of ['index.html', 'app.js', 'app.css', 'sw.js', 'manifest.webmanifest']) {
+test('本番の位置には、site.config.json で選んだフォルダ（v1/ か releases/）が 1 バイトも変わらずに出る', async ({ page }) => {
+  const { production } = JSON.parse(readFileSync('site.config.json', 'utf8')) as { production: string };
+  expect(production).toMatch(/^(v1|releases\/[0-9a-f]{7})$/);
+  const files = readdirSync(production, { recursive: true, withFileTypes: true })
+    .filter(d => d.isFile()).map(d => relative(production, join(d.parentPath, d.name)).split(sep).join('/'));
+  expect(files).toContain('index.html');
+  expect(files).toContain('sw.js');
+  for (const f of files) {
     const res = await page.request.get(`${PROD}${f}`);
     expect(res.ok(), f).toBe(true);
-    expect(Buffer.from(await res.body()).equals(readFileSync(`v1/${f}`)), f).toBe(true);
+    expect(Buffer.from(await res.body()).equals(readFileSync(`${production}/${f}`)), f).toBe(true);
   }
+  // 試作版は、本番の版によらず /hitohi/beta/ に
+  expect((await page.request.get(BETA)).ok()).toBe(true);
 });
 
 test('v1 で書いた日記と控えの日付が、本番を v2 に切り替えた後もすべて見える', async ({ page }) => {
+  await serveProduction(page.context(), 'v1');
   await page.clock.setFixedTime(TODAY);
   await page.goto(PROD);
   await expect(page.locator('#grid .day[data-k]').first()).toBeVisible();
@@ -88,6 +97,7 @@ test('v1 で書いた日記と控えの日付が、本番を v2 に切り替え�
 
 test('試作版は、本番の日記にも設定にも触れない（別の保存場所）', async ({ page }) => {
   // 本番（v1）で書く
+  await serveProduction(page.context(), 'v1');
   await page.clock.setFixedTime(TODAY);
   await page.goto(PROD);
   await expect(page.locator('#grid .day[data-k]').first()).toBeVisible();

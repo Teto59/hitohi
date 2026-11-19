@@ -51,13 +51,20 @@
 
 - リポジトリ：`https://github.com/Teto59/hitohi`（公開）。GitHub の操作は `gh` CLI で。
 - GitHub Pages は **GitHub Actions から公開**（`.github/workflows/deploy.yml`）。main に入るとテストが走り、全部通った時だけ公開される。
-  - 本番 `https://teto59.github.io/hitohi/` … `site.config.json` の `production` で決まる。`"v1"` なら `v1/` をそのまま、`"v2"` なら新しい版。
-    **利用者がチェックリストに合格を出すまで `"v1"` から変えない。**
-  - 試作 `https://teto59.github.io/hitohi/beta/` … いつも新しい版（`npm run build` の `dist/beta`）。保存場所は本番と別。
+  - 試作 `https://teto59.github.io/hitohi/beta/` … **いつも main の最新**（`npm run build` の `dist/beta`）。保存場所は本番と別。
+  - 本番 `https://teto59.github.io/hitohi/` … `site.config.json` の `production` が指す**凍結したフォルダ**をそのまま出す。
+    `releases/<7桁>/`（試作版で合格した版を本番用に組み立てたもの）か、最初の `v1/`。main に何を入れても、本番は変わらない。
+- **本番に出す手順（リリース）**：
+  1. 変更を main に入れる → 試作版が新しくなる。利用者に `docs/CHECKLIST.md` で確かめてもらう。
+     その時、栞のいちばん下の版の名前（`版 2.0.0（試作）　日付　7桁`）の 7 桁を教えてもらう。
+  2. 合格したら `npm run release -- <その7桁>` → `releases/<7桁>/` ができ、`site.config.json` がそこを指す。
+     それをブランチでコミットし、PR → テスト → main へ。これで本番がその版になる。
+  3. 戻す時は、`site.config.json` の `production` を前の `releases/<7桁>` に戻すだけ（`v1` にも戻せる。日記の形は同じ）。
+  - `releases/` と `v1/` の中身は 1 バイトも変えない（テスト「本番の位置には…」で毎回確かめる）。
 - 手元で全部確かめる：`npm run check`（型 → Vitest → 組み立て → Playwright/WebKit）。
 - オフライン用の `sw.js` は組み立ての時に作られ、中身が変われば版の指紋も自動で変わる（手で版を上げなくてよい）。
   画面側は、新しい版が届くと、書いている途中でなければ開き直す。
-- 本番を v2 に切り替える手順は `docs/REBUILD.md` の「段階 5」。
+- v1 から v2 への本番の切り替え（2026-11-19）の記録は `docs/REBUILD.md` の「段階 5」。
 
 ## ファイルの地図（v2）
 
@@ -70,6 +77,8 @@
 - `brand/icons/`（本番）・`brand/icons-beta/`（試作）… ホーム画面のアイコン。
 - `tests/unit/` … ロジックのテスト（Vitest）。`tests/e2e/` … 画面の流れのテスト（Playwright・WebKit）。
 - `scripts/assemble-site.mjs` … 公開するサイト（`site/`）を組み立てる。`scripts/serve.mjs` … テスト用の配信。
-- `v1/` … いま本番に出ている v1 そのもの（1 バイトも変えない。切り替えが済んだら片付けてよい）。`v1/sound/` は v1 の音（v2 では使わない）。
+  `scripts/release.mjs` … 合格した版を本番用に組み立てて `releases/` に残す。`site.config.json` … 本番に出すフォルダ。
+- `releases/<7桁>/` … 本番に出した（出せる）版。1 バイトも変えない。
+- `v1/` … 最初の版 v1 そのもの（1 バイトも変えない。v1→v2 の引き継ぎのテストで使う。戻す時の行き先にもなる）。`v1/sound/` は v1 の音（v2 では使わない）。
 - `docs/PRODUCT.md` … 仕様書。`docs/REBUILD.md` … 再構築の計画と、実装で決めたこと。`docs/CHECKLIST.md` … iPhone 確認手順。
 - `docs/design-ref/` … 合意した見た目の参考画像。`docs/v1-notes.md` … v1 の設計メモ（記録）。

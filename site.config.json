@@ -1,4 +1,4 @@
 {
-  "//": "本番（https://teto59.github.io/hitohi/）に何を出すか。v1 = v1/ フォルダをそのまま／v2 = 新しい版。利用者が試作版のチェックリストに合格を出すまで v1 のまま。",
-  "production": "v1"
+  "//": "本番（https://teto59.github.io/hitohi/）に出すフォルダ。v1 = 最初の版（v1/）、releases/<7桁> = 試作版で合格した版を本番用に組み立てて残したもの（scripts/release.mjs で作る）。試作版（/hitohi/beta/）はいつも main の最新。",
+  "production": "releases/aae353a"
 }
