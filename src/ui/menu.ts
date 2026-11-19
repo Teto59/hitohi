@@ -41,7 +41,9 @@ $('#export').addEventListener('click', async () => {
   const file = new File([makeBackup(entries.values())], name, { type: 'application/json' });
   try {
     if (navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ files: [file], title: name });
+      // ファイルだけを渡す。題名（title）や文（text）も一緒に渡すと、iPhone の「"ファイル"に保存」で
+      // それが別の短いテキストファイルとして一緒に保存されてしまう
+      await navigator.share({ files: [file] });
       exported(n);
       return;
     }

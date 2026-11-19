@@ -42,6 +42,34 @@ test.describe('栞・控え', () => {
     await ctx2.close();
   });
 
+  test('共有シートには控えのファイルだけを渡す（題名などの余計なテキストファイルが一緒に保存されない）', async ({ page }) => {
+    await openApp(page);
+    await seedDB(page, 'hitohi-beta', [{ date: TODAY_KEY, text: '一' }]);
+    await page.reload();
+    // iPhone の共有シートの代わり：渡されたものを記録する
+    await page.evaluate(() => {
+      const w = window as unknown as { __shared: { keys: string[]; files: { name: string; type: string; text: string }[] }[] };
+      w.__shared = [];
+      Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => true });
+      Object.defineProperty(navigator, 'share', {
+        configurable: true,
+        value: async (data: ShareData) => {
+          const files = await Promise.all((data.files ?? []).map(async f => ({ name: f.name, type: f.type, text: await f.text() })));
+          w.__shared.push({ keys: Object.keys(data).sort(), files });
+        },
+      });
+    });
+    await page.locator('#menu-open').click();
+    await page.locator('#export').click();
+    await expect(page.locator('#io-msg')).toHaveText('1日分の控えを書き出しました。');
+    const shared = await page.evaluate(() => (window as unknown as { __shared: unknown[] }).__shared);
+    expect(shared).toEqual([{
+      keys: ['files'], // title や text は渡さない
+      files: [{ name: 'ひとひ控え-試作-2026-11-19.json', type: 'application/json', text: expect.stringContaining('"app": "hitohi"') }],
+    }]);
+    await expect(page.locator('#last-export')).toHaveText('最後に控えを書き出した日　十一月十九日（木）');
+  });
+
   test('「ひとひ」の控えでないファイルは断る（日記は変わらない）', async ({ page }, info) => {
     await openApp(page);
     await seedDB(page, 'hitohi-beta', [{ date: TODAY_KEY, text: 'そのまま' }]);
