@@ -1,6 +1,10 @@
-import { test as base, expect, type Page } from '@playwright/test';
+import { test as base, expect, type BrowserContext, type Page } from '@playwright/test';
 
 export { expect };
+
+/** テスト用の配信で、本番の位置（/hitohi/）に出す版を選ぶ（scripts/serve.mjs） */
+export const serveProduction = (context: BrowserContext, v: 'v1' | 'v2') =>
+  context.addCookies([{ name: 'hitohi-prod', value: v, url: 'http://localhost:4173' }]);
 export const BETA = '/hitohi/beta/';
 export const PROD = '/hitohi/';
 /** テストの「今日」：2026 年 11 月 19 日（木）の朝 */

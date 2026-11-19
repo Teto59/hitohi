@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ひとひ</title>
+<meta name="description" content="鉛筆で綴る、一日一頁の日記">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f1ece1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d1c1a" media="(prefers-color-scheme: dark)">
+<meta name="format-detection" content="telephone=no">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- 手書きの字 Klee One（使う字の分だけ少しずつ読み込まれ、一度読んだら端末に保存される）
+     crossorigin：オフライン用に端末へ控えられる形で受け取るため -->
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Klee+One:wght@600&display=swap">
+<!-- 和風月名の筆文字 Yuji Syuku（12 か月分の字だけ） -->
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&text=%E7%9D%A6%E6%9C%88%E5%A6%82%E5%BC%A5%E7%94%9F%E5%8D%AF%E7%9A%90%E6%B0%B4%E7%84%A1%E6%96%87%E8%91%89%E9%95%B7%E7%A5%9E%E9%9C%9C%E5%B8%AB%E8%B5%B0&display=swap">
+  <script type="module" crossorigin src="/hitohi/assets/index-61DUzYtl.js"></script>
+  <link rel="stylesheet" crossorigin href="/hitohi/assets/index-D4qkuRPt.css">
+  <meta name="apple-mobile-web-app-title" content="ひとひ">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <!-- 朱印のかすれ -->
+  <filter id="stamp" x="-10%" y="-10%" width="120%" height="120%">
+    <feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="2" seed="3" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.2 2.05" result="grain"/>
+    <feComposite in="SourceGraphic" in2="grain" operator="in"/>
+  </filter>
+</svg>
+
+<!--
+  画面の作り
+  ・アプリの枠（#app）は画面に固定。ページ全体はスクロールしない。
+  ・暦と読む画面は、中の紙（.scroller）だけがスクロールする。
+  ・書く画面は、本物の入力欄（textarea）をそのまま見せる。スクロールも入力欄自身に任せる。
+  ・キーボードが出た時だけ、枠の高さを「見えている範囲」に合わせる（src/viewport.ts）。
+-->
+<div id="app">
+
+  <!-- 暦 -->
+  <section id="cal" class="screen" aria-label="暦">
+    <div class="scroller">
+      <div class="page">
+        <header class="cal-head">
+          <div class="wafu" id="wafu"></div>
+          <div class="ym-row">
+            <button class="nav" id="prev" type="button" aria-label="前の月">‹</button>
+            <span class="ym" id="ym"></span>
+            <button class="nav" id="next" type="button" aria-label="次の月">›</button>
+          </div>
+          <div class="sekki" id="sekki"></div>
+        </header>
+        <div class="week" aria-hidden="true">
+          <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+        </div>
+        <div class="grid" id="grid"></div>
+      </div>
+    </div>
+    <footer class="dock">
+      <button class="dock-btn" id="menu-open" type="button">栞</button>
+      <button class="fude" id="write-today" type="button" aria-label="今日を書く">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><path class="enso" d="M32 6c14 0 26 11 26 26S46 58 32 58 6 46 6 32c0-9 5-17 12-21"/></svg>
+        <span>書く</span>
+      </button>
+      <button class="dock-btn" id="go-today" type="button">今日</button>
+    </footer>
+  </section>
+
+  <!-- 読む -->
+  <section id="read" class="screen" aria-label="読む" hidden>
+    <header class="bar">
+      <button class="bar-btn" id="read-back" type="button"><span class="chev" aria-hidden="true">‹</span>暦</button>
+      <div class="bar-mid">
+        <h1 class="date" id="read-date"></h1>
+        <span class="count" id="read-count"></span>
+      </div>
+      <button class="pill" id="fix" type="button">なおす</button>
+    </header>
+    <div class="scroller">
+      <div class="page">
+        <article class="sheet"><div class="hand" id="read-hand"></div></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 書く：本物の入力欄をそのまま見せる -->
+  <section id="edit" class="screen" aria-label="書く" hidden>
+    <header class="bar">
+      <button class="bar-btn" id="edit-back" type="button"><span class="chev" aria-hidden="true">‹</span>暦</button>
+      <div class="bar-mid">
+        <h1 class="date" id="edit-date"></h1>
+        <span class="count" id="edit-count" aria-live="off"></span>
+      </div>
+      <button class="pill primary" id="done" type="button">綴じる</button>
+    </header>
+    <textarea id="ed" autocomplete="off" autocapitalize="off" spellcheck="false"
+      aria-label="今日のこと" placeholder="キーボードのマイクで話すか、指で打って、今日のことを綴ってください。"></textarea>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- 全部消した頁を閉じる時の確認 -->
+  <div class="sheet-wrap" id="confirm" hidden>
+    <div class="scrim"></div>
+    <div class="menu" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+      <h2 id="confirm-title">白紙に戻しますか</h2>
+      <p class="note" id="confirm-text"></p>
+      <div class="btns end">
+        <button type="button" class="pill" id="confirm-clear">白紙にする</button>
+        <button type="button" class="pill primary" id="confirm-keep">書き戻す</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 栞（設定） -->
+  <div class="sheet-wrap" id="menu" hidden>
+    <div class="scrim" id="menu-scrim"></div>
+    <div class="menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+      <h2 id="menu-title">栞</h2>
+      <p class="days" id="days"></p>
+      <div class="row">
+        <span>控え（バックアップ）</span>
+        <p class="note">日記はこのiPhoneの中だけに保存されています。月に一度ほど控えを書き出して、「ファイル」アプリのiCloud Driveなどに保存してください。</p>
+        <p class="note" id="last-export"></p>
+        <div class="btns">
+          <button type="button" class="pill" id="export">控えを書き出す</button>
+          <label class="pill file">控えから戻す<input type="file" id="import" accept="application/json,.json"></label>
+        </div>
+        <p class="note" id="io-msg" role="status"></p>
+      </div>
+      <p class="credit">書体　Klee One／Yuji Syuku（SIL Open Font License）<br><span id="version"></span></p>
+      <button type="button" class="close" id="menu-close">閉じる</button>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
