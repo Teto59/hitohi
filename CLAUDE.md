@@ -50,18 +50,29 @@
 4. 試作版に出す → 利用者が `docs/CHECKLIST.md` で確認 → 合格なら本番へ。
 5. 何を変えたかを、利用者に平易な言葉で報告する（確認できたこと・できていないことを分けて）。
 
-## 公開の仕組み（v1 時点。再構築で変わる場合はここを更新する）
+## 公開の仕組み（v2 の再構築から。変える時はここを更新する）
 
 - リポジトリ：`https://github.com/Teto59/hitohi`（公開）。`gh` CLI はこの PC でログイン済み（アカウント Teto59）。
-- GitHub Pages：`main` ブランチの直下を `https://teto59.github.io/hitohi/` に公開。
-- オフライン用の `sw.js` の `VERSION` を上げると、暦の画面を開いている端末は新しい版に切り替わる。
+- GitHub Pages は **GitHub Actions から公開**（`.github/workflows/deploy.yml`）。main に入るとテストが走り、全部通った時だけ公開される。
+  - 本番 `https://teto59.github.io/hitohi/` … `site.config.json` の `production` で決まる。`"v1"` なら `v1/` をそのまま、`"v2"` なら新しい版。
+    **利用者がチェックリストに合格を出すまで `"v1"` から変えない。**
+  - 試作 `https://teto59.github.io/hitohi/beta/` … いつも新しい版（`npm run build` の `dist/beta`）。保存場所は本番と別。
+- 手元で全部確かめる：`npm run check`（型 → Vitest → 組み立て → Playwright/WebKit）。
+- オフライン用の `sw.js` は組み立ての時に作られ、中身が変われば版の指紋も自動で変わる（手で版を上げなくてよい）。
+  画面側は、新しい版が届くと、書いている途中でなければ開き直す。
+- 本番を v2 に切り替える手順は `docs/REBUILD.md` の「段階 5」。
 
-## ファイルの地図（v1 時点）
+## ファイルの地図（v2）
 
-- `index.html` / `app.css` / `app.js` … v1 本体（ビルドなし）。**再構築で置き換える。**
-  暦の計算（月齢・二十四節気・和風月名・漢数字）、保存（IndexedDB）、控えの書き出し・読み込み、
-  読む画面の禁則つき描画（`renderHand`）は、作りとして問題が出ていないので、テスト付きで移植してよい。
-- `sw.js` … オフライン対応。`manifest.webmanifest`、`icons/` … ホーム画面用。
-- `sound/` … v1 の音（廃止。再構築では使わない）。
-- `docs/PRODUCT.md` … 仕様書。`docs/REBUILD.md` … 再構築の計画。`docs/CHECKLIST.md` … iPhone 確認手順。
+- `index.html`、`src/` … v2 本体（TypeScript、Vite で組み立て）。
+  - `src/koyomi.ts` 暦の計算／`src/marks.ts` 月・朱印・今日の丸／`src/hand.ts` 読む画面の手書きと禁則
+  - `src/store.ts` 保存（IndexedDB）／`src/settings.ts` 設定／`src/backup.ts` 控え／`src/channel.ts` 本番と試作版の違い
+  - `src/ui/` 画面（暦・読む・書く・栞・知らせ）／`src/viewport.ts` キーボード対策（ここ一つだけ）
+  - `src/sw.js` オフライン用の仕組みのもと／`src/beta-shim.js` 試作版への入口の手当て（`docs/REBUILD.md` 4 章）
+- `build/plugin.ts` … 組み立ての仕上げ（本番・試作版の名前・アイコン・sw.js）。`vite.config.ts`。
+- `brand/icons/`（本番）・`brand/icons-beta/`（試作）… ホーム画面のアイコン。
+- `tests/unit/` … ロジックのテスト（Vitest）。`tests/e2e/` … 画面の流れのテスト（Playwright・WebKit）。
+- `scripts/assemble-site.mjs` … 公開するサイト（`site/`）を組み立てる。`scripts/serve.mjs` … テスト用の配信。
+- `v1/` … いま本番に出ている v1 そのもの（1 バイトも変えない。切り替えが済んだら片付けてよい）。`v1/sound/` は v1 の音（v2 では使わない）。
+- `docs/PRODUCT.md` … 仕様書。`docs/REBUILD.md` … 再構築の計画と、実装で決めたこと。`docs/CHECKLIST.md` … iPhone 確認手順。
 - `docs/design-ref/` … 合意した見た目の参考画像。`docs/v1-notes.md` … v1 の設計メモ（記録）。

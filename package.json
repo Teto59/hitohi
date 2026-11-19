@@ -1,0 +1,25 @@
+{
+  "name": "hitohi",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "ひとひ ─ 鉛筆で綴る、一日一頁の日記",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build --mode production --outDir dist/production && vite build --mode beta --outDir dist/beta",
+    "site": "node scripts/assemble-site.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sw.json",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build && npm run site && npm run e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^26.6.6",
+    "fake-indexeddb": "^6.2.8",
+    "jsdom": "^31.0.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}

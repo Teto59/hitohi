@@ -1,0 +1,74 @@
+# テストと公開
+#  ・どの変更でも：型の確認 → ロジックのテスト（Vitest）→ 組み立て → 画面の流れのテスト（Playwright・WebKit）
+#  ・main に入った時だけ：GitHub Pages に公開する
+#      https://teto59.github.io/hitohi/       本番（site.config.json の production。合格が出るまで v1 のまま）
+#      https://teto59.github.io/hitohi/beta/  試作版（v2）
+#    テストが一つでも通らなければ公開しない。
+name: テストと公開
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: テスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: 型の確認
+        run: npm run typecheck
+      - name: ロジックのテスト（暦・禁則・保存・控え・設定）
+        run: npm test
+      - name: 組み立て（本番版と試作版）
+        run: npm run build
+      - name: 公開するサイトを組み立てる
+        run: npm run site
+      - name: WebKit を用意
+        run: npx playwright install --with-deps webkit
+      - name: 画面の流れのテスト（WebKit）
+        run: npx playwright test
+      - name: 失敗した時の記録
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+      - name: 公開するサイトを渡す
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: 公開
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
